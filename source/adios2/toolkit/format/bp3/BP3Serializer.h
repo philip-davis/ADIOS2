@@ -65,8 +65,6 @@ public:
     template <class T>
     void PutVariablePayload(const Variable<T> &variable) noexcept;
 
-    void AllocateDeferredSize();
-
     /**
      *  Serializes data buffer and close current process group
      * @param io : attributes written in first step
@@ -79,6 +77,13 @@ public:
      * @param io
      */
     void CloseData(IO &io);
+
+    /**
+     * Closes bp buffer for streaming mdoe...must reset metadata for the next
+     * step
+     * @param io
+     */
+    void CloseStream(IO &io);
 
     /**
      * Get a string with profiling information for this rank

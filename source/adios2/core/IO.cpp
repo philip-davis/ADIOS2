@@ -113,8 +113,8 @@ void IO::SetTransportParameter(const unsigned int transportIndex,
             throw std::invalid_argument(
                 "ERROR: transportIndex is larger than "
                 "transports created with AddTransport, for key: " +
-                key + ", value: " + value + "in call to SetTransportParameter "
-                                            "\n");
+                key + ", value: " + value +
+                "in call to SetTransportParameter\n");
         }
     }
 
@@ -229,7 +229,6 @@ std::map<std::string, Params> IO::GetAvailableVariables() noexcept
         const std::string name(variablePair.first);
         const std::string type(variablePair.second.first);
         variablesInfo[name]["Type"] = type;
-
         if (type == "compound")
         {
         }
@@ -247,6 +246,14 @@ std::map<std::string, Params> IO::GetAvailableVariables() noexcept
         variablesInfo[name]["Shape"] = VectorToCSV(variable.m_Shape);          \
         variablesInfo[name]["Start"] = VectorToCSV(variable.m_Start);          \
         variablesInfo[name]["Count"] = VectorToCSV(variable.m_Count);          \
+        if (variable.m_SingleValue)                                            \
+        {                                                                      \
+            variablesInfo[name]["SingleValue"] = "true";                       \
+        }                                                                      \
+        else                                                                   \
+        {                                                                      \
+            variablesInfo[name]["SingleValue"] = "false";                      \
+        }                                                                      \
     }
         ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
@@ -271,6 +278,8 @@ std::map<std::string, Params> IO::GetAvailableAttributes() noexcept
     else if (type == GetType<T>())                                             \
     {                                                                          \
         Attribute<T> &attribute = *InquireAttribute<T>(name);                  \
+        attributesInfo[name]["Elements"] =                                     \
+            std::to_string(attribute.m_Elements);                              \
                                                                                \
         if (attribute.m_IsSingleValue)                                         \
         {                                                                      \
@@ -313,24 +322,22 @@ Engine &IO::Open(const std::string &name, const Mode mode, MPI_Comm mpiComm)
     }
 
     std::shared_ptr<Engine> engine;
-
-    const bool isDefaultWriter =
-        m_EngineType.empty() && (mode == Mode::Write || mode == Mode::Append)
-            ? true
-            : false;
-
-    const bool isDefaultReader =
-        m_EngineType.empty() && (mode == Mode::Read) ? true : false;
-
-    if (isDefaultWriter || m_EngineType == "BPFileWriter")
+    const bool isDefaultEngine = m_EngineType.empty() ? true : false;
+    std::string engineTypeLC = m_EngineType;
+    if (!isDefaultEngine)
     {
-        engine = std::make_shared<BPFileWriter>(*this, name, mode, mpiComm);
+        std::transform(engineTypeLC.begin(), engineTypeLC.end(),
+                       engineTypeLC.begin(), ::tolower);
     }
-    else if (isDefaultReader || m_EngineType == "BPFileReader")
+
+    if (isDefaultEngine || engineTypeLC == "bpfile")
     {
-        engine = std::make_shared<BPFileReader>(*this, name, mode, mpiComm);
+        if (mode == Mode::Read)
+            engine = std::make_shared<BPFileReader>(*this, name, mode, mpiComm);
+        else
+            engine = std::make_shared<BPFileWriter>(*this, name, mode, mpiComm);
     }
-    else if (m_EngineType == "HDFMixer")
+    else if (engineTypeLC == "hdfmixer")
     {
 #ifdef ADIOS2_HAVE_HDF5
 #if H5_VERSION_GE(1, 11, 0)
@@ -341,86 +348,62 @@ Engine &IO::Open(const std::string &name, const Mode mode, MPI_Comm mpiComm)
 #endif
 #else
         throw std::invalid_argument("ERROR: this version didn't compile with "
-                                    "HDF5 library, can't use HDF5\n");
+                                    "HDF5 library, can't use HDF5 engine\n");
 #endif
     }
-    else if (m_EngineType == "DataManWriter")
+    else if (engineTypeLC == "dataman")
     {
 #ifdef ADIOS2_HAVE_DATAMAN
-        engine = std::make_shared<DataManWriter>(*this, name, mode, mpiComm);
+        if (mode == Mode::Read)
+            engine =
+                std::make_shared<DataManReader>(*this, name, mode, mpiComm);
+        else
+            engine =
+                std::make_shared<DataManWriter>(*this, name, mode, mpiComm);
 #else
         throw std::invalid_argument(
             "ERROR: this version didn't compile with "
-            "DataMan library, can't Open DataManWriter\n");
+            "DataMan library, can't use DataMan engine\n");
 #endif
     }
-    else if (m_EngineType == "DataManReader")
-    {
-#ifdef ADIOS2_HAVE_DATAMAN
-        engine = std::make_shared<DataManReader>(*this, name, mode, mpiComm);
-#else
-        throw std::invalid_argument(
-            "ERROR: this version didn't compile with "
-            "DataMan library, can't Open DataManReader\n");
-#endif
-    }
-    else if (m_EngineType == "SstWriter")
+    else if (engineTypeLC == "sst")
     {
 #ifdef ADIOS2_HAVE_SST
-        engine = std::make_shared<SstWriter>(*this, name, mode, mpiComm);
+        if (mode == Mode::Read)
+            engine = std::make_shared<SstReader>(*this, name, mode, mpiComm);
+        else
+            engine = std::make_shared<SstWriter>(*this, name, mode, mpiComm);
 #else
         throw std::invalid_argument("ERROR: this version didn't compile with "
-                                    "Sst library, can't Open SstWriter\n");
+                                    "Sst library, can't use Sst engine\n");
 #endif
     }
-    else if (m_EngineType == "SstReader")
-    {
-#ifdef ADIOS2_HAVE_SST
-        engine = std::make_shared<SstReader>(*this, name, mode, mpiComm);
-#else
-        throw std::invalid_argument("ERROR: this version didn't compile with "
-                                    "Sst library, can't Open SstReader\n");
-#endif
-    }
-    else if (m_EngineType == "ADIOS1Writer")
+    else if (engineTypeLC == "adios1")
     {
 #ifdef ADIOS2_HAVE_ADIOS1
-        engine = std::make_shared<ADIOS1Writer>(*this, name, mode, mpiComm);
+        if (mode == Mode::Read)
+            engine = std::make_shared<ADIOS1Reader>(*this, name, mode, mpiComm);
+        else
+            engine = std::make_shared<ADIOS1Writer>(*this, name, mode, mpiComm);
 #else
         throw std::invalid_argument(
             "ERROR: this version didn't compile with ADIOS "
-            "1.x library, can't Open ADIOS1Writer\n");
+            "1.x library, can't use ADIOS1 engine\n");
 #endif
     }
-    else if (m_EngineType == "ADIOS1Reader")
-    {
-#ifdef ADIOS2_HAVE_ADIOS1
-        engine = std::make_shared<ADIOS1Reader>(*this, name, mode, mpiComm);
-#else
-        throw std::invalid_argument(
-            "ERROR: this version didn't compile with ADIOS "
-            "1.x library, can't Open ADIOS1Reader\n");
-#endif
-    }
-    else if (m_EngineType == "HDF5Writer")
+    else if (engineTypeLC == "hdf5")
     {
 #ifdef ADIOS2_HAVE_HDF5
-        engine = std::make_shared<HDF5WriterP>(*this, name, mode, mpiComm);
+        if (mode == Mode::Read)
+            engine = std::make_shared<HDF5ReaderP>(*this, name, mode, mpiComm);
+        else
+            engine = std::make_shared<HDF5WriterP>(*this, name, mode, mpiComm);
 #else
         throw std::invalid_argument("ERROR: this version didn't compile with "
-                                    "HDF5 library, can't use HDF5\n");
+                                    "HDF5 library, can't use HDF5 engine\n");
 #endif
     }
-    else if (m_EngineType == "HDF5Reader")
-    {
-#ifdef ADIOS2_HAVE_HDF5
-        engine = std::make_shared<HDF5ReaderP>(*this, name, mode, mpiComm);
-#else
-        throw std::invalid_argument("ERROR: this version didn't compile with "
-                                    "HDF5 library, can't use HDF5\n");
-#endif
-    }
-    else if (m_EngineType == "PluginEngine")
+    else if (engineTypeLC == "pluginengine")
     {
         engine = std::make_shared<PluginEngine>(*this, name, mode, mpiComm);
     }
