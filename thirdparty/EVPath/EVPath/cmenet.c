@@ -338,7 +338,7 @@ initiate_conn(CManager cm, CMtrans_services svc, transport_entry trans,
     int host_ip = 0;
     struct in_addr sin_addr;
     (void)conn_attr_list;
-    int timeout = 5000;   /* connection time out default 5 seconds */
+    int timeout = 500000;   /* connection time out default 5 seconds */
 
     if (!query_attr(attrs, CM_ENET_HOSTNAME, /* type pointer */ NULL,
     /* value pointer */ (attr_value *)(long) & host_name)) {
@@ -363,7 +363,7 @@ initiate_conn(CManager cm, CMtrans_services svc, transport_entry trans,
     if (!query_attr(attrs, CM_ENET_PORT, /* type pointer */ NULL,
     /* value pointer */ (attr_value *)(long) & int_port_num)) {
 	svc->trace_out(cm, "CMEnet transport found no CM_ENET_PORT attribute");
-	return 0;
+    return 0;
     } else {
         svc->trace_out(cm, "CMEnet transport connect to port %d", int_port_num);
     }
@@ -487,8 +487,10 @@ libcmenet_LTX_initiate_conn(CManager cm, CMtrans_services svc,
     attr_list conn_attr_list = create_attr_list();
     CMConnection conn;
 
-    if (!initiate_conn(cm, svc, trans, attrs, enet_conn_data, conn_attr_list))
-	return NULL;
+    if (!initiate_conn(cm, svc, trans, attrs, enet_conn_data, conn_attr_list)) {
+        printf("initiate_conn failed\n");    
+    	return NULL;
+    }
 
     add_attr(conn_attr_list, CM_PEER_LISTEN_PORT, Attr_Int4,
 	     (attr_value) (long)enet_conn_data->remote_contact_port);
