@@ -82,6 +82,8 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(mpiReaderComm, &rank);
     MPI_Comm_size(mpiReaderComm, &nproc);
 
+    double readTime = 0;
+
     try
     {
         ReadSettings settings(argc, argv, rank, nproc);
@@ -103,7 +105,7 @@ int main(int argc, char *argv[])
             inIO.AddTransport("File", {{"verbose", "4"}});
         }
 
-        adios2::IO outIO = ad.DeclareIO("readerOutput");
+       // adios2::IO outIO = ad.DeclareIO("readerOutput");
 
         adios2::Engine reader =
             inIO.Open(settings.inputfile, adios2::Mode::Read, mpiReaderComm);
@@ -116,7 +118,7 @@ int main(int argc, char *argv[])
         adios2::Variable<double> vTin;
         adios2::Variable<double> vTout;
         adios2::Variable<double> vdT;
-        adios2::Engine writer;
+        //adios2::Engine writer;
         bool firstStep = true;
         int step = 0;
 
@@ -126,8 +128,14 @@ int main(int argc, char *argv[])
                 reader.BeginStep(adios2::StepMode::NextAvailable, 0.0f);
             if (status != adios2::StepStatus::OK)
             {
+                std::cout << "Rank "<< rank << ": Step status not OK "  << std::endl;
                 break;
             }
+
+            MPI_Barrier(mpiReaderComm);	
+            double timeStart = MPI_Wtime();
+
+
 
             // Variable objects disappear between steps so we need this every
             // step
@@ -158,12 +166,14 @@ int main(int argc, char *argv[])
                 dT.resize(settings.readsize[0] * settings.readsize[1]);
 
                 /* Create output variables and open output stream */
-                vTout = outIO.DefineVariable<double>(
+/*            
+    vTout = outIO.DefineVariable<double>(
                     "T", {gndx, gndy}, settings.offset, settings.readsize);
                 vdT = outIO.DefineVariable<double>(
                     "dT", {gndx, gndy}, settings.offset, settings.readsize);
                 writer = outIO.Open(settings.outputfile, adios2::Mode::Write,
                                     mpiReaderComm);
+*/
 
                 MPI_Barrier(mpiReaderComm); // sync processes just for stdout
             }
@@ -187,24 +197,37 @@ int main(int argc, char *argv[])
             /* Compute dT from current T (Tin) and previous T (Tout)
              * and save Tin in Tout for output and for future computation
              */
-            Compute(Tin, Tout, dT, firstStep);
+            //Compute(Tin, Tout, dT, firstStep);
+	    MPI_Barrier(mpiReaderComm);
+            double timeEnd = MPI_Wtime();
+            double stepTime = timeEnd - timeStart;
+
+            if(rank == 0) {
+                std::cout << "step " << step << " read in " << stepTime << " s." << std::endl;
+            }
+            readTime += stepTime;
+
 
             /* Output Tout and dT */
-            writer.BeginStep();
+/*   
+         writer.BeginStep();
 
             if (vTout)
                 writer.Put<double>(vTout, Tout.data());
             if (vdT)
                 writer.Put<double>(vdT, dT.data());
             writer.EndStep();
-
+*/
             step++;
             firstStep = false;
         }
         reader.Close();
-        if (writer)
-            writer.Close();
-    }
+        
+ 	if(rank == 0) {
+            std::cout << "Total read time = " <<  readTime << " s\n";
+	}
+  
+ }
     catch (std::invalid_argument &e) // command-line argument errors
     {
         std::cout << e.what() << std::endl;

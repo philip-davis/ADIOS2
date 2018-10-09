@@ -71,8 +71,8 @@ static void BreakdownArrayName(const char *Name, char **base_name_p,
     int TypeLen;
     int ElementSize;
     const char *NameStart;
-    char *TypeStart = index(Name, '_') + 1;
-    TypeStart = index(TypeStart, '_') + 1;
+    char *TypeStart = strchr(Name, '_') + 1;
+    TypeStart = strchr(TypeStart, '_') + 1;
     sscanf(Name, "SST%d_%d_", &ElementSize, &TypeLen);
     NameStart = TypeStart + TypeLen + 1;
     *element_size_p = ElementSize;
@@ -192,13 +192,14 @@ static char *TranslateFFSType2ADIOS(const char *Type, int size)
             return strdup("unsigned short");
         }
     }
-    else if (strcmp(Type, "double") == 0)
+    else if ((strcmp(Type, "double") == 0) || (strcmp(Type, "float") == 0))
     {
         if (size == sizeof(float))
         {
             return strdup("float");
         }
-        else if (size == sizeof(long double))
+        else if ((sizeof(long double) != sizeof(double)) &&
+                 (size == sizeof(long double)))
         {
             return strdup("long double");
         }
@@ -206,6 +207,14 @@ static char *TranslateFFSType2ADIOS(const char *Type, int size)
         {
             return strdup("double");
         }
+    }
+    else if (strcmp(Type, "complex4") == 0)
+    {
+        return strdup("float complex");
+    }
+    else if (strcmp(Type, "complex8") == 0)
+    {
+        return strdup("double complex");
     }
     return strdup(Type);
 }
@@ -248,7 +257,7 @@ static void AddSimpleField(FMFieldList *FieldP, int *CountP, const char *Name,
         FMFieldList PriorField;
         PriorField = &((*FieldP)[(*CountP) - 1]);
         int PriorFieldSize = PriorField->field_size;
-        if (index(PriorField->field_type, '['))
+        if (strchr(PriorField->field_type, '['))
         {
             // really a pointer
             PriorFieldSize = sizeof(void *);
@@ -710,10 +719,11 @@ static void IssueReadRequests(SstStream Stream, FFSArrayRequest Reqs)
             size_t DataSize =
                 ((struct FFSMetadataInfoStruct *)Info->MetadataBaseAddrs[i])
                     ->DataBlockSize;
-            void *DP_TimestepInfo = Mdata->DP_TimestepInfo ? Mdata->DP_TimestepInfo[i] : NULL;
+            void *DP_TimestepInfo =
+                Mdata->DP_TimestepInfo ? Mdata->DP_TimestepInfo[i] : NULL;
             Info->WriterInfo[i].RawBuffer =
                 realloc(Info->WriterInfo[i].RawBuffer, DataSize);
-            
+
             Info->WriterInfo[i].ReadHandle = SstReadRemoteMemory(
                 Stream, i, Stream->ReaderTimestep, 0, DataSize,
                 Info->WriterInfo[i].RawBuffer, DP_TimestepInfo);

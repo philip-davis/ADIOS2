@@ -783,7 +783,8 @@ extern void SstStreamDestroy(SstStream Stream)
         free(FFSList);
         FFSList = Tmp;
     }
-    if (Stream->ConfigParams->MarshalMethod == SstMarshalFFS)
+    if (Stream->WriterConfigParams &&
+        (Stream->WriterConfigParams->MarshalMethod == SstMarshalFFS))
     {
         FFSFreeMarshalData(Stream);
         if (Stream->M)
@@ -1057,5 +1058,9 @@ static void CP_sendToPeer(SstStream s, CP_PeerCohort Cohort, int Rank,
             return;
         }
     }
-    CMwrite(Peers[Rank].CMconn, Format, Data);
+    if (CMwrite(Peers[Rank].CMconn, Format, Data) != 1)
+    {
+        CP_verbose(s, "Message failed to send to peer %d in CP_sendToPeer()\n",
+                   Rank);
+    }
 }

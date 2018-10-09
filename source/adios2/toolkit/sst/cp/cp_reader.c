@@ -255,8 +255,13 @@ SstStream SstReaderOpen(const char *Name, SstParams Params, MPI_Comm comm)
                                         ReaderRegister.WriterResponseCondition,
                                         &response);
 
-            CMwrite(conn, Stream->CPInfo->ReaderRegisterFormat,
-                    &ReaderRegister);
+            if (CMwrite(conn, Stream->CPInfo->ReaderRegisterFormat,
+                        &ReaderRegister) != 1)
+            {
+                CP_verbose(
+                    Stream,
+                    "Message failed to send to writer in SstReaderOpen\n");
+            }
             free(ReaderRegister.CP_ReaderInfo);
             free(ReaderRegister.DP_ReaderInfo);
 
@@ -414,6 +419,10 @@ void queueTimestepMetadataMsgAndNotify(SstStream Stream,
     {
         Stream->Timesteps = New;
     }
+    CP_verbose(Stream, "Received a Timestep metadata message for timestep %d, "
+                       "signaling condition\n",
+               tsm->Timestep);
+
     pthread_cond_signal(&Stream->DataCondition);
     pthread_mutex_unlock(&Stream->DataLock);
 }
@@ -488,39 +497,6 @@ extern void CP_WriterCloseHandler(CManager cm, CMConnection conn, void *Msg_v,
     Stream->Status = PeerClosed;
     /* wake anyone that might be waiting */
     pthread_cond_signal(&Stream->DataCondition);
-    pthread_mutex_unlock(&Stream->DataLock);
-}
-
-static TSMetadataList waitForMetadata(SstStream Stream, long Timestep)
-{
-    struct _TimestepMetadataList *Next;
-    pthread_mutex_lock(&Stream->DataLock);
-    Next = Stream->Timesteps;
-    while (1)
-    {
-        Next = Stream->Timesteps;
-        while (Next)
-        {
-            if (Next->MetadataMsg->Timestep == Timestep)
-            {
-                pthread_mutex_unlock(&Stream->DataLock);
-                CP_verbose(Stream, "Returning metadata for Timestep %d\n",
-                           Timestep);
-                return Next;
-            }
-            Next = Next->Next;
-        }
-        /* didn't find requested timestep, check Stream status */
-        if (Stream->Status != Established)
-        {
-            /* closed or failed, return NULL */
-            return NULL;
-        }
-        CP_verbose(Stream, "Waiting for metadata for Timestep %d\n", Timestep);
-        /* wait until we get the timestep metadata or something else changes */
-        pthread_cond_wait(&Stream->DataCondition, &Stream->DataLock);
-    }
-    /* NOTREACHED */
     pthread_mutex_unlock(&Stream->DataLock);
 }
 
@@ -613,7 +589,11 @@ static void sendOneToEachWriterRank(SstStream s, CMFormat f, void *Msg,
         /* add the writer Stream identifier to each outgoing
          * message */
         *WS_StreamPtr = s->ConnectionsToWriter[peer].RemoteStreamID;
-        CMwrite(conn, f, Msg);
+        if (CMwrite(conn, f, Msg) != 1)
+        {
+            CP_verbose(s, "Message failed to send to writer %d (%p)\n", peer,
+                       *WS_StreamPtr);
+        }
         i++;
     }
 }

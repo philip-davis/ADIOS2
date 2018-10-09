@@ -295,13 +295,10 @@ adios2_attribute *adios2_define_variable_attribute(
     }
     case (adios2_type_string_array):
     {
-        std::vector<std::string> arrayStrings(elements);
-        const char *char2D = reinterpret_cast<const char *>(data);
-        for (auto i = 0; i < elements; ++i)
-        {
-            arrayStrings[i] =
-                std::string(&char2D[i * adios2_string_array_element_max_size]);
-        }
+        const char **char2D =
+            reinterpret_cast<const char **>(const_cast<void *>(data));
+
+        std::vector<std::string> arrayStrings(char2D, char2D + elements);
 
         attribute = &ioCpp.DefineAttribute<std::string>(
             name, arrayStrings.data(), arrayStrings.size(), variable_name,
@@ -603,6 +600,13 @@ void adios2_flush_all_engines(adios2_io *io)
     adios2::helper::CheckForNullptr(
         io, "for adios2_io, in call to adios2_flush_all_engines");
     reinterpret_cast<adios2::core::IO *>(io)->FlushAll();
+}
+
+void adios2_lock_definitions(adios2_io *io)
+{
+    adios2::helper::CheckForNullptr(
+        io, "for adios2_io, in call to adios2_lock_definitions");
+    reinterpret_cast<adios2::core::IO *>(io)->LockDefinitions();
 }
 
 const char *adios2_io_engine_type(const adios2_io *io, size_t *length)

@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
 
     try
     {
-        double timeStart = MPI_Wtime();
+    double writeTime = 0;
         Settings settings(argc, argv, rank, nproc);
         HeatTransfer ht(settings);
         IO io(settings, mpiHeatTransferComm);
@@ -83,14 +83,24 @@ int main(int argc, char *argv[])
                 ht.exchange(mpiHeatTransferComm);
                 ht.heatEdges();
             }
+            MPI_Barrier(mpiHeatTransferComm);
+            double timeStart = MPI_Wtime();
 
             io.write(t, ht, settings, mpiHeatTransferComm);
+             MPI_Barrier(mpiHeatTransferComm);
+          double timeEnd = MPI_Wtime();
+          double stepTime = timeEnd - timeStart;
+        if(rank == 0) {
+                std::cout << "step " << t << " write in " << stepTime << " s." << std::endl;
+            }
+	    writeTime += stepTime;
+        
         }
         MPI_Barrier(mpiHeatTransferComm);
 
         double timeEnd = MPI_Wtime();
         if (rank == 0)
-            std::cout << "Total runtime = " << timeEnd - timeStart << "s\n";
+            std::cout << "Total write time = " << writeTime << "\n";
     }
     catch (std::invalid_argument &e) // command-line argument errors
     {

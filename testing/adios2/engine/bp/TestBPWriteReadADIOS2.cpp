@@ -26,7 +26,6 @@ public:
 // 1D 1x8 test data
 //******************************************************************************
 
-// ADIOS2 BP write, native ADIOS1 read
 TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead1D8)
 {
     // Each process would write a 1x8 array and all processes would
@@ -49,8 +48,10 @@ TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead1D8)
 
 #ifdef ADIOS2_HAVE_MPI
     adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+    EXPECT_TRUE(adios);
 #else
     adios2::ADIOS adios(true);
+    EXPECT_TRUE(adios);
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");
@@ -96,7 +97,7 @@ TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead1D8)
         // files
         // Ex. if you tune Nx and NSteps, the test would fail. But if you clear
         // the cache in
-        // ${adios2Build}/testing/adios2/engine/bp/ADIOS2BPWriteADIOS1Read1D8.bp.dir,
+        // ${adios2Build}/testing/adios2/engine/bp/ADIOS2BPWriteRead1D8.bp.dir,
         // then it works
         adios2::Engine bpWriter = io.Open(fname, adios2::Mode::Write);
 
@@ -360,7 +361,6 @@ TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead1D8)
 // 2D 2x4 test data
 //******************************************************************************
 
-// ADIOS2 BP write, native ADIOS1 read
 TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead2D2x4)
 {
     // Each process would write a 2x4 array and all processes would
@@ -386,8 +386,10 @@ TEST_F(BPWriteReadTestADIOS2, ADIOS2BPWriteRead2D2x4)
 
 #ifdef ADIOS2_HAVE_MPI
     adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+    EXPECT_TRUE(adios);
 #else
     adios2::ADIOS adios(true);
+    EXPECT_TRUE(adios);
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");

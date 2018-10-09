@@ -672,7 +672,7 @@ static void EvpathProvideTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
 
     Entry->Next = Stream->Timesteps;
     Stream->Timesteps = Entry;
-    *TimestepInfoPtr = Info;
+    *TimestepInfoPtr = NULL;
 }
 
 static void EvpathReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,

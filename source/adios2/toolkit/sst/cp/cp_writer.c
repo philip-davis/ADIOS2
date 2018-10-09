@@ -346,25 +346,6 @@ static long earliestAvailableTimestepNumber(SstStream Stream,
     return Ret;
 }
 
-static void AddRefRangeTimestep(SstStream Stream, long LowRange, long HighRange)
-{
-    CPTimestepList List;
-    PTHREAD_MUTEX_LOCK(&Stream->DataLock);
-    List = Stream->QueuedTimesteps;
-    while (List)
-    {
-        if ((List->Timestep >= LowRange) && (List->Timestep <= HighRange))
-        {
-            List->ReferenceCount++;
-            CP_verbose(Stream, "AddRef : Writer-side Timestep %ld now has "
-                               "reference count %d\n",
-                       List->Timestep, List->ReferenceCount);
-        }
-        List = List->Next;
-    }
-    PTHREAD_MUTEX_UNLOCK(&Stream->DataLock);
-}
-
 static void SubRefRangeTimestep(SstStream Stream, long LowRange, long HighRange)
 {
     CPTimestepList Last = NULL, List;
@@ -535,10 +516,14 @@ WS_ReaderInfo WriterParticipateInReaderOpen(SstStream Stream)
     CP_WSR_Stream->ParentStream = Stream;
     CP_WSR_Stream->Connections = connections_to_reader;
 
-    int success = initWSReader(CP_WSR_Stream, ReturnData->ReaderCohortSize,
-                               ReturnData->CP_ReaderInfo);
+    int MySuccess = initWSReader(CP_WSR_Stream, ReturnData->ReaderCohortSize,
+                                 ReturnData->CP_ReaderInfo);
 
-    if (!success)
+    int GlobalSuccess = 0;
+    MPI_Allreduce(&MySuccess, &GlobalSuccess, 1, MPI_INT, MPI_LAND,
+                  Stream->mpiComm);
+
+    if (!GlobalSuccess)
     {
         return NULL;
     }
@@ -607,7 +592,12 @@ WS_ReaderInfo WriterParticipateInReaderOpen(SstStream Stream)
                 (struct _CP_WriterInitInfo *)pointers[i]->CP_Info;
             response.DP_WriterInfo[i] = pointers[i]->DP_Info;
         }
-        CMwrite(conn, Stream->CPInfo->WriterResponseFormat, &response);
+        if (CMwrite(conn, Stream->CPInfo->WriterResponseFormat, &response) != 1)
+        {
+            CP_verbose(Stream,
+                       "Message failed to send to reader in participate in "
+                       "reader open\n");
+        }
         free(response.CP_WriterInfo);
         free(response.DP_WriterInfo);
     }
@@ -636,8 +626,13 @@ void sendOneToWSRCohort(WS_ReaderInfo CP_WSR_Stream, CMFormat f, void *Msg,
         /* add the reader-rank-specific Stream identifier to each outgoing
          * message */
         *RS_StreamPtr = CP_WSR_Stream->Connections[peer].RemoteStreamID;
-        CP_verbose(s, "Sending a message to reader %d\n", peer);
-        CMwrite(conn, f, Msg);
+        CP_verbose(s, "Sending a message to reader %d (%p)\n", peer,
+                   *RS_StreamPtr);
+        if (CMwrite(conn, f, Msg) != 1)
+        {
+            CP_verbose(s, "Message failed to send to reader %d (%p)\n", peer,
+                       *RS_StreamPtr);
+        }
         j++;
     }
 }
@@ -675,6 +670,15 @@ static void waitForReaderResponseAndSendQueued(WS_ReaderInfo Reader)
                 {
                     /* For first Msg, send all previous formats */
                     List->Msg->Formats = Stream->PreviousFormats;
+                }
+                else
+                {
+                    /*
+                     *  TENTATIVE!  TRYING TO SEE IF THIS MIGHT IMPACT RARE
+                     *  STUCK READER PROBLEM.
+                     *  Add  a short delay between consecutive messages
+                    */
+                    usleep(10 * Stream->ConnectionUsleepMultiplier);
                 }
                 sendOneToWSRCohort(
                     Reader, Stream->CPInfo->DeliverTimestepMetadataFormat,

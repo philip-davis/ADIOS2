@@ -8,6 +8,12 @@ add_subdirectory(operations)
 add_executable(TestBPWriteReadADIOS2 TestBPWriteReadADIOS2.cpp)
 target_link_libraries(TestBPWriteReadADIOS2 adios2 gtest)
 
+add_executable(TestBPWriteReadADIOS2fstream TestBPWriteReadADIOS2fstream.cpp)
+target_link_libraries(TestBPWriteReadADIOS2fstream adios2 gtest)
+
+add_executable(TestBPWriteReadADIOS2stdio TestBPWriteReadADIOS2stdio.cpp)
+target_link_libraries(TestBPWriteReadADIOS2stdio adios2 gtest)
+
 add_executable(TestBPWriteReadAsStreamADIOS2 TestBPWriteReadAsStreamADIOS2.cpp)
 target_link_libraries(TestBPWriteReadAsStreamADIOS2 adios2 gtest)
 
@@ -47,6 +53,8 @@ target_link_libraries(TestBPLargeMetadata adios2 gtest)
 if(ADIOS2_HAVE_MPI)
 
   target_link_libraries(TestBPWriteReadADIOS2 MPI::MPI_C)
+  target_link_libraries(TestBPWriteReadADIOS2fstream MPI::MPI_C)
+  target_link_libraries(TestBPWriteReadADIOS2stdio MPI::MPI_C)
   target_link_libraries(TestBPWriteReadAsStreamADIOS2 MPI::MPI_C)
   target_link_libraries(TestBPWriteReadAsStreamADIOS2_Threads MPI::MPI_C)
   target_link_libraries(TestBPWriteReadAttributesADIOS2 MPI::MPI_C)
@@ -69,6 +77,8 @@ if(ADIOS2_HAVE_MPI)
 endif()
 
 gtest_add_tests(TARGET TestBPWriteReadADIOS2 ${extra_test_args})
+gtest_add_tests(TARGET TestBPWriteReadADIOS2fstream ${extra_test_args})
+gtest_add_tests(TARGET TestBPWriteReadADIOS2stdio ${extra_test_args})
 gtest_add_tests(TARGET TestBPWriteReadAsStreamADIOS2 ${extra_test_args})
 gtest_add_tests(TARGET TestBPWriteReadAsStreamADIOS2_Threads ${extra_test_args})
 gtest_add_tests(TARGET TestBPWriteReadAttributesADIOS2 ${extra_test_args})
@@ -79,42 +89,3 @@ gtest_add_tests(TARGET TestBPWriteReadMultiblock ${extra_test_args})
 gtest_add_tests(TARGET TestBPWriteReadVector ${extra_test_args})
 gtest_add_tests(TARGET TestBPWriteReadAttributesMultirank ${extra_test_args})
 gtest_add_tests(TARGET TestBPLargeMetadata ${extra_test_args})
-  
-if (ADIOS2_HAVE_ADIOS1)
-  add_executable(TestBPWriteRead TestBPWriteRead.cpp)
-  target_link_libraries(TestBPWriteRead adios2 gtest_interface adios1::adios)
-
-  add_executable(TestBPWriteReadAttributes TestBPWriteReadAttributes.cpp)
-  target_link_libraries(TestBPWriteReadAttributes
-    adios2 gtest_interface adios1::adios
-  )
-
-  add_executable(TestBPWriteReadstdio TestBPWriteReadstdio.cpp)
-  target_link_libraries(TestBPWriteReadstdio
-    adios2 gtest_interface adios1::adios
-  )
-
-  add_executable(TestBPWriteReadfstream TestBPWriteReadfstream.cpp)
-  target_link_libraries(TestBPWriteReadfstream
-    adios2 gtest_interface adios1::adios
-  )
-
-  add_executable(TestBPWriteProfilingJSON TestBPWriteProfilingJSON.cpp)
-  target_link_libraries(TestBPWriteProfilingJSON
-    adios2 gtest_interface adios2::thirdparty::nlohmann_json
-  )
-
-  if(ADIOS2_HAVE_MPI)
-    target_link_libraries(TestBPWriteRead MPI::MPI_C)
-#    target_link_libraries(TestBPWriteReadAttributes MPI::MPI_C)
-    target_link_libraries(TestBPWriteReadstdio MPI::MPI_C)
-    target_link_libraries(TestBPWriteReadfstream MPI::MPI_C)
-    target_link_libraries(TestBPWriteProfilingJSON MPI::MPI_C)
-  endif()
-
-  gtest_add_tests(TARGET TestBPWriteRead ${extra_test_args})
-#  gtest_add_tests(TARGET TestBPWriteReadAttributes ${extra_test_args})
-  gtest_add_tests(TARGET TestBPWriteReadstdio ${extra_test_args})
-  gtest_add_tests(TARGET TestBPWriteReadfstream ${extra_test_args})
-  gtest_add_tests(TARGET TestBPWriteProfilingJSON ${extra_test_args})
-endif()
