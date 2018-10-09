@@ -8,6 +8,7 @@
  *      Author: Norbert Podhorszki
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include <adios2_c.h>
@@ -28,7 +29,7 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &nproc);
     adios2_adios *adiosH = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
 #else
-    adios2_adios *adiosH = adios2_init_nompi(adios2_debug_mode_on);
+    adios2_adios *adiosH = adios2_init(adios2_debug_mode_on);
 #endif
 
     char engineName[32] = "BPFile";
@@ -62,6 +63,13 @@ int main(int argc, char *argv[])
     // Define variables in ioH
     adios2_define_variable(ioH, "nproc", adios2_type_int, 0, NULL, NULL, NULL,
                            adios2_constant_dims_true);
+    adios2_define_variable(ioH, "varChar", adios2_type_char, 1, shape, start,
+                           count, adios2_constant_dims_true);
+
+    adios2_define_variable(ioH, "varSChar", adios2_type_signed_char, 1, shape,
+                           start, count, adios2_constant_dims_true);
+    adios2_define_variable(ioH, "varUChar", adios2_type_unsigned_char, 1, shape,
+                           start, count, adios2_constant_dims_true);
 
     adios2_define_variable(ioH, "varI8", adios2_type_int8_t, 1, shape, start,
                            count, adios2_constant_dims_true);
@@ -92,8 +100,8 @@ int main(int argc, char *argv[])
     // Define attributes in ioH
     adios2_define_attribute(ioH, "name", adios2_type_string, "TestUtilsCWrite",
                             1);
-    // adios2_define_attribute(ioH, "strarray", adios2_type_string_array,
-    // strarray, 4);
+    adios2_define_attribute(ioH, "strarray", adios2_type_string_array, strarray,
+                            sizeof(strarray) / sizeof(char *));
     adios2_define_attribute(ioH, "nwriters", adios2_type_int, &nproc, 1);
     unsigned short shape2D[2] = {(unsigned short)d2_Nx, (unsigned short)d2_Ny};
     adios2_define_attribute(ioH, "shape2D", adios2_type_unsigned_short, shape2D,
@@ -109,6 +117,9 @@ int main(int argc, char *argv[])
 
     // inquire variables
     adios2_variable *varNproc = adios2_inquire_variable(ioH, "nproc");
+    adios2_variable *varChar = adios2_inquire_variable(ioH, "varChar");
+    adios2_variable *varSChar = adios2_inquire_variable(ioH, "varSChar");
+    adios2_variable *varUChar = adios2_inquire_variable(ioH, "varUChar");
     adios2_variable *varI8 = adios2_inquire_variable(ioH, "varI8");
     adios2_variable *varI16 = adios2_inquire_variable(ioH, "varI16");
     adios2_variable *varI32 = adios2_inquire_variable(ioH, "varI32");
@@ -125,6 +136,12 @@ int main(int argc, char *argv[])
         adios2_open(ioH, "TestUtilsCWriter.bp", adios2_mode_write);
 
     adios2_put(engineH, varNproc, &nproc, adios2_mode_deferred);
+    adios2_put(engineH, varChar, "abcdefghijklmnopqrstuvwxyz",
+               adios2_mode_deferred);
+    adios2_put(engineH, varSChar, "abcdefghijklmnopqrstuvwxyz",
+               adios2_mode_deferred);
+    adios2_put(engineH, varUChar, "abcdefghijklmnopqrstuvwxyz",
+               adios2_mode_deferred);
     adios2_put(engineH, varI8, data_I8, adios2_mode_deferred);
     adios2_put(engineH, varI16, data_I16, adios2_mode_deferred);
     adios2_put(engineH, varI32, data_I32, adios2_mode_deferred);

@@ -117,7 +117,11 @@ void Reorganize::Run()
     print0("Write method            = ", wmethodname);
     print0("Write method parameters = ", wmethodparams);
 
-    core::ADIOS adios(comm, true);
+#ifdef ADIOS2_HAVE_MPI
+    core::ADIOS adios(MPI_COMM_SELF, true, "C++");
+#else
+    core::ADIOS adios(true, "C++");
+#endif
     core::IO &io = adios.DeclareIO("group");
 
     print0("Waiting to open stream ", infilename, "...");
@@ -135,7 +139,7 @@ void Reorganize::Run()
     while (true)
     {
         adios2::StepStatus status =
-            rStream.BeginStep(adios2::StepMode::NextAvailable, 0.0f);
+            rStream.BeginStep(adios2::StepMode::NextAvailable);
         if (status != adios2::StepStatus::OK)
         {
             break;
