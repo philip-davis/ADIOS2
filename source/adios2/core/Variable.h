@@ -70,6 +70,8 @@ public:
         T Min = T();
         T Max = T();
         T Value = T();
+        T *BufferP = nullptr;
+        std::vector<T> BufferV;
         SelectionType Selection = SelectionType::BoundingBox;
         bool IsValue = false;
     };
@@ -91,6 +93,19 @@ public:
     T *GetData() const noexcept;
 
     size_t SubStreamsInfoSize();
+
+    Dims Shape(const size_t step) const;
+
+    std::pair<T, T> MinMax(const size_t step) const;
+
+    T Min(const size_t step) const;
+
+    T Max(const size_t step) const;
+
+private:
+    Dims DoShape(const size_t step) const;
+
+    std::pair<T, T> DoMinMax(const size_t step) const;
 };
 
 } // end namespace core

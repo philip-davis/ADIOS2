@@ -14,6 +14,7 @@
 #include "Operator.h"
 
 #include "adios2/ADIOSTypes.h"
+#include "adios2/core/Variable.h"
 
 namespace adios2
 {
@@ -34,6 +35,7 @@ class Variable; // private implementation
 template <class T>
 class Variable
 {
+    using IOType = typename TypeInfo<T>::IOType;
 
     friend class IO;
     friend class Engine;
@@ -134,10 +136,13 @@ public:
     adios2::ShapeID ShapeID() const;
 
     /**
-     * Inspects current shape
+     * Inspects shape in global variables
+     * @param step input for a particular Shape if changing over time. If
+     * default, either return absolute or in streaming mode it returns the shape
+     * for the current engine step
      * @return shape vector
      */
-    adios2::Dims Shape() const;
+    adios2::Dims Shape(const size_t step = adios2::EngineCurrentStep) const;
 
     /**
      * Inspects current start point
@@ -201,31 +206,61 @@ public:
     std::vector<Operation> Operations() const;
 
     /**
-     * Read mode only: return the absolute minimum for current variable
-     * @return minimum
+     * Read mode only: return minimum and maximum values for current variable at
+     * a step. For streaming mode (BeginStep/EndStep): use default (leave empty)
+     * for current Engine Step
+     * At random access mode (File Engines only): default = absolute MinMax
+     * @param step input step
+     * @return pair.first = min pair.second = max
      */
-    T Min() const;
+    std::pair<T, T> MinMax(const size_t step = adios2::DefaultSizeT) const;
 
     /**
-     * Read mode only: return the absolute maximum for current variable
-     * @return maximum
+     * Read mode only: return minimum values for current variable at
+     * a step. For streaming mode (within BeginStep/EndStep): use default (leave
+     * empty) for current Engine Step
+     * At random access mode (File Engines only): default = absolute MinMax
+     * @param step input step
+     * @return variable minimum
      */
-    T Max() const;
+    T Min(const size_t step = adios2::DefaultSizeT) const;
+
+    /**
+     * Read mode only: return minimum values for current variable at
+     * a step. For streaming mode (within BeginStep/EndStep): use default
+     * (leave empty) for current Engine Step
+     * At random access mode (File Engines only): default = absolute MinMax
+     * @param step input step
+     * @return variable minimum
+     */
+    T Max(const size_t step = adios2::DefaultSizeT) const;
 
     /** Contains sub-block information for a particular Variable<T> */
     struct Info
     {
-        adios2::Dims Start; ///< block start
-        adios2::Dims Count; ///< block count
-        T Min = T();        ///< block Min, if IsValue is false
-        T Max = T();        ///< block Max, if IsValue is false
-        T Value = T();      ///< block Value, if IsValue is true
-        bool IsValue;       ///< true: value, false: array
+        adios2::Dims Start;   ///< block start
+        adios2::Dims Count;   ///< block count
+        IOType Min = IOType();   ///< block Min, if IsValue is false
+        IOType Max = IOType();   ///< block Max, if IsValue is false
+        IOType Value = IOType(); ///< block Value, if IsValue is true
+        bool IsValue = false; ///< true: value, false: array
+        size_t BlockID = -1;  ///< block ID for block selections
+        const T *Data() const
+        {
+            return m_Info ? (m_Info->BufferP ? m_Info->BufferP
+                                             : m_Info->BufferV.data())
+                          : nullptr;
+        }; ///< block data for block selections. Provided by core Info.
+        // allow Engine to set m_Info
+        friend class Engine;
+
+    private:
+        const typename core::Variable<IOType>::Info *m_Info;
     };
 
 private:
-    Variable<T>(core::Variable<T> *variable);
-    core::Variable<T> *m_Variable = nullptr;
+    Variable<T>(core::Variable<IOType> *variable);
+    core::Variable<IOType> *m_Variable = nullptr;
 };
 
 } // end namespace adios2

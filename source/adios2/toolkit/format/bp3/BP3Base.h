@@ -26,6 +26,7 @@
 #include "adios2/ADIOSMPICommOnly.h"
 #include "adios2/ADIOSMacros.h"
 #include "adios2/ADIOSTypes.h"
+#include "adios2/core/Engine.h"
 #include "adios2/core/VariableBase.h"
 #include "adios2/toolkit/aggregator/mpi/MPIChain.h"
 #include "adios2/toolkit/format/BufferSTL.h"
@@ -189,6 +190,9 @@ public:
      * [threadID][bufferID]
      */
     std::map<size_t, std::map<size_t, std::vector<char>>> m_ThreadBuffers;
+
+    /** true: NVMex each rank creates its own directory */
+    bool m_NodeLocal = false;
 
     /**
      * Unique constructor
@@ -529,6 +533,10 @@ protected:
 
     /** set number of substreams, turns on aggregation if less < MPI_Size */
     void InitParameterSubStreams(const std::string value);
+
+    /** Sets if IO is node-local so each rank creates its own IO directory and
+     * stream */
+    void InitParameterNodeLocal(const std::string value);
 
     /**
      * Returns data type index from enum Datatypes

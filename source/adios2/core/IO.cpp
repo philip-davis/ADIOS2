@@ -15,8 +15,16 @@
 
 #include "adios2/ADIOSMPI.h"
 #include "adios2/ADIOSMacros.h"
+
 #include "adios2/engine/bp3/BP3Reader.h"
 #include "adios2/engine/bp3/BP3Writer.h"
+#include "adios2/engine/inline/InlineReader.h"
+#include "adios2/engine/inline/InlineWriter.h"
+
+/*BP4 engine headers*/
+#include "adios2/engine/bp4/BP4Reader.h"
+#include "adios2/engine/bp4/BP4Writer.h"
+
 #include "adios2/engine/skeleton/SkeletonReader.h"
 #include "adios2/engine/skeleton/SkeletonWriter.h"
 #include "adios2/helper/adiosFunctions.h" //BuildParametersMap
@@ -24,6 +32,11 @@
 #ifdef ADIOS2_HAVE_DATAMAN // external dependencies
 #include "adios2/engine/dataman/DataManReader.h"
 #include "adios2/engine/dataman/DataManWriter.h"
+#endif
+
+#ifdef ADIOS2_HAVE_WDM // external dependencies
+#include "adios2/engine/wdm/WdmReader.h"
+#include "adios2/engine/wdm/WdmWriter.h"
 #endif
 
 #ifdef ADIOS2_HAVE_SST // external dependencies
@@ -436,6 +449,21 @@ Engine &IO::Open(const std::string &name, const Mode mode,
 
         m_EngineType = "bp";
     }
+    else if (engineTypeLC == "bp4" || engineTypeLC == "bp4file")
+    {
+        if (mode == Mode::Read)
+        {
+            engine =
+                std::make_shared<engine::BP4Reader>(*this, name, mode, mpiComm);
+        }
+        else
+        {
+            engine =
+                std::make_shared<engine::BP4Writer>(*this, name, mode, mpiComm);
+        }
+
+        m_EngineType = "bp4file";
+    }
     else if (engineTypeLC == "hdfmixer")
     {
 #ifdef ADIOS2_HAVE_HDF5
@@ -470,7 +498,22 @@ Engine &IO::Open(const std::string &name, const Mode mode,
             "DataMan library, can't use DataMan engine\n");
 #endif
     }
-    else if (engineTypeLC == "sst")
+    else if (engineTypeLC == "wdm")
+    {
+#ifdef ADIOS2_HAVE_WDM
+        if (mode == Mode::Read)
+            engine =
+                std::make_shared<engine::WdmReader>(*this, name, mode, mpiComm);
+        else
+            engine =
+                std::make_shared<engine::WdmWriter>(*this, name, mode, mpiComm);
+#else
+        throw std::invalid_argument(
+            "ERROR: this version didn't compile with "
+            "DataMan library, can't use DataMan engine\n");
+#endif
+    }
+    else if (engineTypeLC == "sst" || engineTypeLC == "effis")
     {
 #ifdef ADIOS2_HAVE_SST
         if (mode == Mode::Read)
@@ -521,6 +564,15 @@ Engine &IO::Open(const std::string &name, const Mode mode,
             engine = std::make_shared<engine::SkeletonWriter>(*this, name, mode,
                                                               mpiComm);
     }
+    else if (engineTypeLC == "inline")
+    {
+        if (mode == Mode::Read)
+            engine = std::make_shared<engine::InlineReader>(*this, name, mode,
+                                                            mpiComm);
+        else
+            engine = std::make_shared<engine::InlineWriter>(*this, name, mode,
+                                                            mpiComm);
+    }
     else
     {
         if (m_DebugMode)
@@ -550,6 +602,22 @@ Engine &IO::Open(const std::string &name, const Mode mode,
 Engine &IO::Open(const std::string &name, const Mode mode)
 {
     return Open(name, mode, m_MPIComm);
+}
+
+Engine &IO::GetEngine(const std::string &name)
+{
+    auto itEngine = m_Engines.find(name);
+    if (m_DebugMode)
+    {
+        if (itEngine == m_Engines.end())
+        {
+            throw std::invalid_argument(
+                "ERROR: engine name " + name +
+                " could not be found, in call to GetEngine\n");
+        }
+    }
+    // return a reference
+    return *itEngine->second.get();
 }
 
 void IO::FlushAll()
@@ -589,6 +657,7 @@ void IO::ResetVariablesStepSelection(const bool zeroStart,
         Variable<T> *variable = InquireVariable<T>(name);                      \
         variable->CheckRandomAccessConflict(hint);                             \
         variable->ResetStepsSelection(zeroStart);                              \
+        variable->m_RandomAccess = false;                                      \
     }
         ADIOS2_FOREACH_TYPE_1ARG(declare_type)
 #undef declare_type

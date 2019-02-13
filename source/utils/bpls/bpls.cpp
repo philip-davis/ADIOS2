@@ -665,7 +665,11 @@ int printVariableInfo(core::Engine *fp, core::IO *io,
     enum ADIOS_DATATYPES adiosvartype = type_to_enum(variable->m_Type);
     int retval = 0;
 
-    if (!variable->m_SingleValue || nsteps > 1)
+    bool isGlobalValue = (nsteps == 1);
+    isGlobalValue &= variable->m_SingleValue;
+    isGlobalValue &= (variable->m_ShapeID != ShapeID::GlobalArray);
+
+    if (!isGlobalValue)
     {
         fprintf(outf, "  ");
         if (nsteps > 1)
@@ -808,7 +812,7 @@ int printVariableInfo(core::Engine *fp, core::IO *io,
     }
     else
     {
-        // scalar
+        // single GlobalValue without timesteps
         fprintf(outf, "  scalar");
         if (longopt)
         {
@@ -1629,8 +1633,8 @@ int readVarBlock(core::Engine *fp, core::IO *io, core::Variable<T> *variable,
                   // data)
     uint64_t actualreadn;     // our decision how much to read at once
     uint64_t readn[MAX_DIMS]; // how big chunk to read in in each dimension?
-    bool incdim;          // used in incremental reading in
-    int ndigits_dims[32]; // # of digits (to print) of each dimension
+    bool incdim;              // used in incremental reading in
+    int ndigits_dims[32];     // # of digits (to print) of each dimension
 
     const size_t elemsize = variable->m_ElementSize;
     const int nsteps = static_cast<int>(variable->GetAvailableStepsCount());
@@ -2553,15 +2557,15 @@ void print_decomp(core::Engine *fp, core::IO *io, core::Variable<T> *variable)
                     {
                         if (variable->m_ShapeID == ShapeID::GlobalArray)
                         {
-                            fprintf(
-                                outf, "%*" PRIu64 ":%*" PRIu64, ndigits_dims[k],
-                                blocks[j].Start[k], ndigits_dims[k],
-                                blocks[j].Start[k] + blocks[j].Count[k] - 1);
+                            fprintf(outf, "%*zu:%*zu", ndigits_dims[k],
+                                    blocks[j].Start[k], ndigits_dims[k],
+                                    blocks[j].Start[k] + blocks[j].Count[k] -
+                                        1);
                         }
                         else
                         {
                             // blockStart is empty vector for LocalArrays
-                            fprintf(outf, "0:%*" PRIu64, ndigits_dims[k],
+                            fprintf(outf, "0:%*zu", ndigits_dims[k],
                                     blocks[j].Count[k] - 1);
                         }
                     }

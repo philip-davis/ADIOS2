@@ -11,7 +11,7 @@ add_library(adios2
   core/IO.cpp core/IO.tcc
   core/Operator.cpp
   core/Stream.cpp core/Stream.tcc
-  core/Variable.cpp 
+  core/Variable.cpp core/Variable.tcc
   core/VariableBase.cpp
   core/VariableCompound.cpp core/VariableCompound.tcc
 
@@ -33,8 +33,14 @@ add_library(adios2
   engine/bp3/BP3Reader.cpp engine/bp3/BP3Reader.tcc
   engine/bp3/BP3Writer.cpp engine/bp3/BP3Writer.tcc
 
+  engine/bp4/BP4Reader.cpp engine/bp4/BP4Reader.tcc
+  engine/bp4/BP4Writer.cpp engine/bp4/BP4Writer.tcc
+
   engine/skeleton/SkeletonReader.cpp engine/skeleton/SkeletonReader.tcc
   engine/skeleton/SkeletonWriter.cpp engine/skeleton/SkeletonWriter.tcc
+
+  engine/inline/InlineReader.cpp engine/inline/InlineReader.tcc
+  engine/inline/InlineWriter.cpp engine/inline/InlineWriter.tcc
 
 #toolkit
   toolkit/format/BufferSTL.cpp
@@ -49,6 +55,17 @@ add_library(adios2
   toolkit/format/bp3/operation/BP3SZ.tcc
   toolkit/format/bp3/operation/BP3MGARD.cpp
   toolkit/format/bp3/operation/BP3MGARD.tcc
+
+  toolkit/format/bp4/BP4Base.cpp toolkit/format/bp4/BP4Base.tcc
+  toolkit/format/bp4/BP4Serializer.cpp toolkit/format/bp4/BP4Serializer.tcc
+  toolkit/format/bp4/BP4Deserializer.cpp toolkit/format/bp4/BP4Deserializer.tcc
+  toolkit/format/bp4/operation/BP4Operation.cpp
+  toolkit/format/bp4/operation/BP4Zfp.cpp
+  toolkit/format/bp4/operation/BP4Zfp.tcc
+  toolkit/format/bp4/operation/BP4SZ.cpp
+  toolkit/format/bp4/operation/BP4SZ.tcc
+  toolkit/format/bp4/operation/BP4MGARD.cpp
+  toolkit/format/bp4/operation/BP4MGARD.tcc
 
   toolkit/profiling/iochrono/Timer.cpp
 
@@ -82,24 +99,33 @@ endif()
 
 if(ADIOS2_HAVE_ZeroMQ)
     target_sources(adios2 PRIVATE
-        toolkit/transport/wan/WANZmqPubSub.cpp
-        toolkit/transport/wan/WANZmqPubSub.h
-        toolkit/transport/wan/WANZmqP2P.cpp
-        toolkit/transport/wan/WANZmqP2P.h
+        toolkit/transport/socket/SocketZmq.h
+        toolkit/transport/socket/SocketZmqReqRep.cpp
+        toolkit/transport/socket/SocketZmqReqRep.h
+        toolkit/transport/socket/SocketZmqPubSub.cpp
+        toolkit/transport/socket/SocketZmqPubSub.h
+        toolkit/transport/socket/SocketZmqP2P.cpp
+        toolkit/transport/socket/SocketZmqP2P.h
+        toolkit/transportman/wanman/WANMan.cpp
+        toolkit/transportman/wanman/WANMan.h
+        toolkit/transportman/stagingman/StagingMan.cpp
+        toolkit/transportman/stagingman/StagingMan.h
         )
     target_link_libraries(adios2 PRIVATE ZeroMQ::ZMQ)
 endif()
 
+if(ADIOS2_HAVE_MPI)
+    target_sources(adios2 PRIVATE
+        toolkit/format/dataman/DataManSerializer.cpp
+        toolkit/format/dataman/DataManSerializer.tcc
+        toolkit/format/dataman/DataManSerializer.h
+        )
+    target_link_libraries(adios2 PUBLIC MPI::MPI_C)
+    target_link_libraries(adios2 PRIVATE nlohmann_json)
+endif()
+
 if(ADIOS2_HAVE_DataMan)
   target_sources(adios2 PRIVATE
-      toolkit/format/dataman/DataManDeserializer.cpp
-      toolkit/format/dataman/DataManDeserializer.tcc
-      toolkit/format/dataman/DataManDeserializer.h
-      toolkit/format/dataman/DataManSerializer.cpp
-      toolkit/format/dataman/DataManSerializer.tcc
-      toolkit/format/dataman/DataManSerializer.h
-      toolkit/transportman/dataman/DataMan.cpp
-      toolkit/transportman/dataman/DataMan.h
       engine/dataman/DataManCommon.cpp
       engine/dataman/DataManCommon.h
       engine/dataman/DataManReader.cpp
@@ -109,8 +135,22 @@ if(ADIOS2_HAVE_DataMan)
       engine/dataman/DataManWriter.h
       engine/dataman/DataManWriter.tcc
   )
-  target_link_libraries(adios2 PRIVATE nlohmann_json)
 endif()
+
+if(ADIOS2_HAVE_WDM)
+  target_sources(adios2 PRIVATE
+      toolkit/format/dataman/DataManSerializer.cpp
+      toolkit/format/dataman/DataManSerializer.tcc
+      toolkit/format/dataman/DataManSerializer.h
+      engine/wdm/WdmReader.cpp
+      engine/wdm/WdmReader.h
+      engine/wdm/WdmReader.tcc
+      engine/wdm/WdmWriter.cpp
+      engine/wdm/WdmWriter.h
+      engine/wdm/WdmWriter.tcc
+  )
+endif()
+
 
 if(ADIOS2_HAVE_SST)
   add_subdirectory(toolkit/sst)

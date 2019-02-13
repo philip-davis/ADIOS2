@@ -763,7 +763,7 @@ static void waitForReaderResponseAndSendQueued(WS_ReaderInfo Reader)
                      *  TENTATIVE!  TRYING TO SEE IF THIS MIGHT IMPACT RARE
                      *  STUCK READER PROBLEM.
                      *  Add  a short delay between consecutive messages
-                    */
+                     */
                     usleep(10 * Stream->ConnectionUsleepMultiplier);
                 }
                 sendOneToWSRCohort(
@@ -790,18 +790,23 @@ SstStream SstWriterOpen(const char *Name, SstParams Params, MPI_Comm comm)
     Stream->ConfigParams = Params;
 
     char *Filename = strdup(Name);
+
+    Stream->mpiComm = comm;
+
+    MPI_Comm_rank(Stream->mpiComm, &Stream->Rank);
+    MPI_Comm_size(Stream->mpiComm, &Stream->CohortSize);
+
     Stream->DP_Interface = SelectDP(&Svcs, Stream, Stream->ConfigParams);
 
     if (!Stream->DP_Interface)
     {
         CP_verbose(Stream, "Failed to load DataPlane %s for Stream \"%s\"\n",
-                   Stream->DataTransport, Filename);
+                   Params->DataTransport, Filename);
         return NULL;
     }
 
     Stream->CPInfo = CP_getCPInfo(Stream->DP_Interface);
 
-    Stream->mpiComm = comm;
     if (Stream->RendezvousReaderCount > 0)
     {
         Stream->FirstReaderCondition =
@@ -811,9 +816,6 @@ SstStream SstWriterOpen(const char *Name, SstParams Params, MPI_Comm comm)
     {
         Stream->FirstReaderCondition = -1;
     }
-
-    MPI_Comm_rank(Stream->mpiComm, &Stream->Rank);
-    MPI_Comm_size(Stream->mpiComm, &Stream->CohortSize);
 
     Stream->DP_Stream =
         Stream->DP_Interface->initWriter(&Svcs, Stream, Stream->ConfigParams);
@@ -1366,9 +1368,11 @@ extern void SstInternalProvideTimestep(
                                "queue full condition\n",
                        Timestep);
             FreeTimestep(FreeClientData);
-            Formats = NULL;
             LocalMetadata = NULL;
             Data = NULL;
+            /*
+             * DON'T NULL Formats!  READER WILL NEED THOSE FOR FUTURE TIMESTEPS!
+             */
         }
     }
 
@@ -1454,7 +1458,7 @@ extern void SstInternalProvideTimestep(
 
         Msg->Metadata = NULL;
         Msg->DP_TimestepInfo = NULL;
-        Msg->Formats = NULL;
+        Msg->Formats = Formats;
         CP_verbose(Stream, "Sending Empty TimestepMetadata for Discarded "
                            "timestep %d, one to each reader\n",
                    Timestep);

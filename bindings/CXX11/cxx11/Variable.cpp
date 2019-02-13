@@ -19,7 +19,8 @@ namespace adios2
 #define declare_type(T)                                                        \
                                                                                \
     template <>                                                                \
-    Variable<T>::Variable(core::Variable<T> *variable) : m_Variable(variable)  \
+    Variable<T>::Variable(core::Variable<IOType> *variable)                    \
+    : m_Variable(variable)                                                     \
     {                                                                          \
     }                                                                          \
                                                                                \
@@ -106,10 +107,10 @@ namespace adios2
     }                                                                          \
                                                                                \
     template <>                                                                \
-    Dims Variable<T>::Shape() const                                            \
+    Dims Variable<T>::Shape(const size_t step) const                           \
     {                                                                          \
         helper::CheckForNullptr(m_Variable, "in call to Variable<T>::Shape");  \
-        return m_Variable->m_Shape;                                            \
+        return m_Variable->Shape(step);                                        \
     }                                                                          \
                                                                                \
     template <>                                                                \
@@ -181,17 +182,24 @@ namespace adios2
     }                                                                          \
                                                                                \
     template <>                                                                \
-    T Variable<T>::Min() const                                                 \
+    std::pair<T, T> Variable<T>::MinMax(const size_t step) const               \
     {                                                                          \
-        helper::CheckForNullptr(m_Variable, "in call to Variable<T>::Min");    \
-        return m_Variable->m_Min;                                              \
+        helper::CheckForNullptr(m_Variable, "in call to Variable<T>::MinMax"); \
+        return m_Variable->MinMax(step);                                       \
     }                                                                          \
                                                                                \
     template <>                                                                \
-    T Variable<T>::Max() const                                                 \
+    T Variable<T>::Min(const size_t step) const                                \
+    {                                                                          \
+        helper::CheckForNullptr(m_Variable, "in call to Variable<T>::Min");    \
+        return m_Variable->Min(step);                                          \
+    }                                                                          \
+                                                                               \
+    template <>                                                                \
+    T Variable<T>::Max(const size_t step) const                                \
     {                                                                          \
         helper::CheckForNullptr(m_Variable, "in call to Variable<T>::Max");    \
-        return m_Variable->m_Max;                                              \
+        return m_Variable->Max(step);                                          \
     }
 
 ADIOS2_FOREACH_TYPE_1ARG(declare_type)
