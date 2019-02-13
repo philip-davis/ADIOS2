@@ -1467,14 +1467,15 @@ enet_protocol_check_timeouts (ENetHost * host, ENetPeer * peer, ENetEvent * even
            ENET_TIME_LESS (outgoingCommand -> sentTime, peer -> earliestTimeout))
          peer -> earliestTimeout = outgoingCommand -> sentTime;
 
+
        if (peer -> earliestTimeout != 0 &&
              (ENET_TIME_DIFFERENCE (host -> serviceTime, peer -> earliestTimeout) >= peer -> timeoutMaximum ||
                (outgoingCommand -> roundTripTimeout >= outgoingCommand -> roundTripTimeoutLimit &&
                  ENET_TIME_DIFFERENCE (host -> serviceTime, peer -> earliestTimeout) >= peer -> timeoutMinimum)))
        {
           enet_protocol_notify_disconnect (host, peer, event);
-
           return 1;
+            //fprintf(stderr, "ENET: Would have done a peer disconnect. roundTripTimeout = %i, packetsLost = %i.\n", outgoingCommand->roundTripTimeout, peer->packetsLost);
        }
 
        if (outgoingCommand -> packet != NULL)
@@ -1579,6 +1580,9 @@ enet_protocol_send_reliable_outgoing_commands (ENetHost * host, ENetPeer * peer)
        if (outgoingCommand -> roundTripTimeout == 0)
        {
           outgoingCommand -> roundTripTimeout = peer -> roundTripTime + 4 * peer -> roundTripTimeVariance;
+          /*if(outgoingCommand -> roundTripTimeout > 1000) {
+                fprintf(stderr, "Massive initial rTT of %i. Peer rTT = %i, peer variance = %i.\n", outgoingCommand -> roundTripTimeout, peer -> roundTripTime, peer -> roundTripTimeVariance);
+            }*/
           outgoingCommand -> roundTripTimeoutLimit = peer -> timeoutLimit * outgoingCommand -> roundTripTimeout;
        }
 

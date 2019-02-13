@@ -73,6 +73,8 @@ int main(int argc, char *argv[])
 
         io.write(0, ht, settings, mpiHeatTransferComm);
 
+        double stepTime, totalTime = 0;
+
         for (unsigned int t = 1; t <= settings.steps; ++t)
         {
             if (rank == 0)
@@ -84,13 +86,25 @@ int main(int argc, char *argv[])
                 ht.heatEdges();
             }
 
+            stepTime = MPI_Wtime();
             io.write(t, ht, settings, mpiHeatTransferComm);
+            stepTime = MPI_Wtime() - stepTime;
+            if(!rank) {
+                std::cout<<"Step " << t <<": write time = " << stepTime << std::endl;
+            }
+
+            totalTime += stepTime;
+           
+ 
         }
         MPI_Barrier(mpiHeatTransferComm);
 
         double timeEnd = MPI_Wtime();
-        if (rank == 0)
-            std::cout << "Total runtime = " << timeEnd - timeStart << "s\n";
+        if (rank == 0) {
+            std::cout<<"Total write time = " << totalTime << std::endl;
+            std::cout << "Total writer run time = " << timeEnd - timeStart << "s\n";
+            
+        }
     }
     catch (std::invalid_argument &e) // command-line argument errors
     {
