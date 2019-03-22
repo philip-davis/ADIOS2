@@ -400,81 +400,15 @@ void BP4Serializer::UpdateOffsetsInMetadata()
                 break;
             }
 
-            case (type_byte):
-            {
-                UpdateIndexOffsetsCharacteristics<char>(currentPosition,
-                                                        type_byte, buffer);
-                break;
-            }
-
-            case (type_short):
-            {
-                UpdateIndexOffsetsCharacteristics<short>(currentPosition,
-                                                         type_short, buffer);
-                break;
-            }
-
-            case (type_integer):
-            {
-                UpdateIndexOffsetsCharacteristics<int>(currentPosition,
-                                                       type_integer, buffer);
-                break;
-            }
-
-            case (type_long):
-            {
-                UpdateIndexOffsetsCharacteristics<int64_t>(currentPosition,
-                                                           type_long, buffer);
-
-                break;
-            }
-
-            case (type_unsigned_byte):
-            {
-                UpdateIndexOffsetsCharacteristics<unsigned char>(
-                    currentPosition, type_unsigned_byte, buffer);
-
-                break;
-            }
-
-            case (type_unsigned_short):
-            {
-                UpdateIndexOffsetsCharacteristics<unsigned short>(
-                    currentPosition, type_unsigned_short, buffer);
-
-                break;
-            }
-
-            case (type_unsigned_integer):
-            {
-                UpdateIndexOffsetsCharacteristics<unsigned int>(
-                    currentPosition, type_unsigned_integer, buffer);
-
-                break;
-            }
-
-            case (type_unsigned_long):
-            {
-                UpdateIndexOffsetsCharacteristics<uint64_t>(
-                    currentPosition, type_unsigned_long, buffer);
-
-                break;
-            }
-
-            case (type_real):
-            {
-                UpdateIndexOffsetsCharacteristics<float>(currentPosition,
-                                                         type_real, buffer);
-                break;
-            }
-
-            case (type_double):
-            {
-                UpdateIndexOffsetsCharacteristics<double>(currentPosition,
-                                                          type_double, buffer);
-
-                break;
-            }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        UpdateIndexOffsetsCharacteristics<T>(                                  \
+            currentPosition, TypeTraits<T>::type_enum, buffer);                \
+        break;                                                                 \
+    }
+                ADIOS2_FOREACH_ATTRIBUTE_PRIMITIVE_STDTYPE_1ARG(make_case)
+#undef make_case
 
             default:
                 // TODO: complex, long double
@@ -506,7 +440,7 @@ void BP4Serializer::UpdateOffsetsInMetadata()
 // PRIVATE FUNCTIONS
 void BP4Serializer::PutAttributes(core::IO &io)
 {
-    const auto attributesDataMap = io.GetAttributesDataMap();
+    const auto &attributesDataMap = io.GetAttributesDataMap();
 
     auto &buffer = m_Data.m_Buffer;
     auto &position = m_Data.m_Position;
@@ -555,7 +489,7 @@ void BP4Serializer::PutAttributes(core::IO &io)
         PutAttributeInData(attribute, stats);                                  \
         PutAttributeInIndex(attribute, stats);                                 \
     }
-        ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
         ++memberID;
@@ -1193,7 +1127,7 @@ BP4Serializer::DeserializeIndicesPerRankThreads(
     return deserialized;
 }
 
-/* Merge and serialize all the indeices at each step */
+/* Merge and serialize all the indices at each step */
 void BP4Serializer::MergeSerializeIndicesPerStep(
     const std::unordered_map<std::string, std::vector<SerialElementIndex>>
         &nameRankIndices,
@@ -1210,146 +1144,24 @@ void BP4Serializer::MergeSerializeIndicesPerStep(
         switch (dataTypeEnum)
         {
 
-        case (type_string):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<std::string>(buffer, position,
-                                                             type_string, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        const auto characteristics = ReadElementIndexCharacteristics<T>(       \
+            buffer, position, TypeTraits<T>::type_enum, true);                 \
+        count = characteristics.EntryCount;                                    \
+        length = characteristics.EntryLength;                                  \
+        timeStep = characteristics.Statistics.Step;                            \
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_STDTYPE_1ARG(make_case)
+#undef make_case
 
         case (type_string_array):
         {
             const auto characteristics =
                 ReadElementIndexCharacteristics<std::string>(
                     buffer, position, type_string_array, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_byte):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<char>(
-                buffer, position, type_byte, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_short):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<short>(
-                buffer, position, type_short, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_integer):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<int>(
-                buffer, position, type_integer, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_long):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<int64_t>(buffer, position,
-                                                         type_long, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned char>(
-                    buffer, position, type_unsigned_byte, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned short>(
-                    buffer, position, type_unsigned_short, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned int>(
-                    buffer, position, type_unsigned_integer, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<uint64_t>(
-                buffer, position, type_unsigned_long, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_real):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<float>(
-                buffer, position, type_real, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_double):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<double>(
-                buffer, position, type_double, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_complex):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<double>(
-                buffer, position, type_complex, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_double_complex):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<double>(
-                buffer, position, type_double_complex, true);
             count = characteristics.EntryCount;
             length = characteristics.EntryLength;
             timeStep = characteristics.Statistics.Step;
@@ -1655,126 +1467,24 @@ void BP4Serializer::MergeSerializeIndices(
         switch (dataTypeEnum)
         {
 
-        case (type_string):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<std::string>(buffer, position,
-                                                             type_string, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        const auto characteristics = ReadElementIndexCharacteristics<T>(       \
+            buffer, position, TypeTraits<T>::type_enum, true);                 \
+        count = characteristics.EntryCount;                                    \
+        length = characteristics.EntryLength;                                  \
+        timeStep = characteristics.Statistics.Step;                            \
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(make_case)
+#undef make_case
 
         case (type_string_array):
         {
             const auto characteristics =
                 ReadElementIndexCharacteristics<std::string>(
                     buffer, position, type_string_array, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_byte):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<char>(
-                buffer, position, type_byte, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_short):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<short>(
-                buffer, position, type_short, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_integer):
-        {
-            const auto characteristics = ReadElementIndexCharacteristics<int>(
-                buffer, position, type_integer, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_long):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<int64_t>(buffer, position,
-                                                         type_long, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned char>(
-                    buffer, position, type_unsigned_byte, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned short>(
-                    buffer, position, type_unsigned_short, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            const auto characteristics =
-                ReadElementIndexCharacteristics<unsigned int>(
-                    buffer, position, type_unsigned_integer, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<uint64_t>(
-                buffer, position, type_unsigned_long, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_real):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<float>(
-                buffer, position, type_real, true);
-            count = characteristics.EntryCount;
-            length = characteristics.EntryLength;
-            timeStep = characteristics.Statistics.Step;
-            break;
-        }
-
-        case (type_double):
-        {
-            auto characteristics = ReadElementIndexCharacteristics<double>(
-                buffer, position, type_double, true);
             count = characteristics.EntryCount;
             length = characteristics.EntryLength;
             timeStep = characteristics.Statistics.Step;
@@ -2175,7 +1885,7 @@ size_t BP4Serializer::GetAttributesSizeInData(core::IO &io) const noexcept
         const core::Attribute<T> &attribute = *io.InquireAttribute<T>(name);   \
         attributesSizeInData += GetAttributeSizeInData<T>(attribute);          \
     }
-        ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_type)
 #undef declare_type
     }
 
@@ -2194,7 +1904,7 @@ size_t BP4Serializer::GetAttributesSizeInData(core::IO &io) const noexcept
         const core::Variable<T> &, const typename core::Variable<T>::Info &,   \
         const bool) noexcept;
 
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 //------------------------------------------------------------------------------

@@ -115,6 +115,9 @@ public:
     static const std::string PREFIX_BLOCKINFO;
     static const std::string PREFIX_STAT;
 
+    static const std::string PARAMETER_COLLECTIVE;
+
+    void ParseParameters(core::IO &io);
     void Init(const std::string &name, MPI_Comm comm, bool toWrite);
 
     template <class T>
@@ -216,7 +219,7 @@ private:
 #define declare_template_instantiation(T)                                      \
     extern template void HDF5Common::Write(core::Variable<T> &variable,        \
                                            const T *value);
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 } // end namespace interop

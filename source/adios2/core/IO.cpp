@@ -165,11 +165,11 @@ bool IO::RemoveVariable(const std::string &name) noexcept
 #define declare_type(T)                                                        \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
-        auto variableMap = GetVariableMap<T>();                                \
+        auto &variableMap = GetVariableMap<T>();                               \
         variableMap.erase(index);                                              \
         isRemoved = true;                                                      \
     }
-        ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
     }
 
@@ -185,7 +185,7 @@ void IO::RemoveAllVariables() noexcept
 {
     m_Variables.clear();
 #define declare_type(T) GetVariableMap<T>().clear();
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
     m_Compound.clear();
 }
@@ -197,7 +197,7 @@ bool IO::RemoveAttribute(const std::string &name) noexcept
     // attribute exists
     if (itAttribute != m_Attributes.end())
     {
-        // first remove the Variable object
+        // first remove the Attribute object
         const std::string type(itAttribute->second.first);
         const unsigned int index(itAttribute->second.second);
 
@@ -208,11 +208,11 @@ bool IO::RemoveAttribute(const std::string &name) noexcept
 #define declare_type(T)                                                        \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
-        auto variableMap = GetVariableMap<T>();                                \
-        variableMap.erase(index);                                              \
+        auto &attributeMap = GetAttributeMap<T>();                             \
+        attributeMap.erase(index);                                             \
         isRemoved = true;                                                      \
     }
-        ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_type)
 #undef declare_type
     }
 
@@ -229,7 +229,7 @@ void IO::RemoveAllAttributes() noexcept
     m_Attributes.clear();
 
 #define declare_type(T) GetAttributeMap<T>().clear();
-    ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_type)
 #undef declare_type
 }
 
@@ -267,7 +267,7 @@ std::map<std::string, Params> IO::GetAvailableVariables() noexcept
                 helper::ValueToString(variable.m_Max);                         \
         }                                                                      \
     }
-        ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
     }
 
@@ -328,7 +328,7 @@ IO::GetAvailableAttributes(const std::string &variableName,
                 "{ " + helper::VectorToCSV(attribute.m_DataArray) + " }";      \
         }                                                                      \
     }
-        ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_template_instantiation)
+        ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
     } // end for
@@ -361,7 +361,7 @@ std::string IO::InquireVariableType(const std::string &name) const noexcept
             return std::string();                                              \
         }                                                                      \
     }
-        ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
     }
 
@@ -508,9 +508,8 @@ Engine &IO::Open(const std::string &name, const Mode mode,
             engine =
                 std::make_shared<engine::WdmWriter>(*this, name, mode, mpiComm);
 #else
-        throw std::invalid_argument(
-            "ERROR: this version didn't compile with "
-            "DataMan library, can't use DataMan engine\n");
+        throw std::invalid_argument("ERROR: this version didn't compile with "
+                                    "Wdm library, can't use Wdm engine\n");
 #endif
     }
     else if (engineTypeLC == "sst" || engineTypeLC == "effis")
@@ -659,7 +658,7 @@ void IO::ResetVariablesStepSelection(const bool zeroStart,
         variable->ResetStepsSelection(zeroStart);                              \
         variable->m_RandomAccess = false;                                      \
     }
-        ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
     }
 }
@@ -717,7 +716,7 @@ void IO::CheckTransportType(const std::string type) const
                                                 const Dims &, const bool);     \
     template Variable<T> *IO::InquireVariable<T>(const std::string &) noexcept;
 
-ADIOS2_FOREACH_TYPE_1ARG(define_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(define_template_instantiation)
 #undef define_template_instatiation
 
 #define declare_template_instantiation(T)                                      \
@@ -730,7 +729,7 @@ ADIOS2_FOREACH_TYPE_1ARG(define_template_instantiation)
     template Attribute<T> *IO::InquireAttribute<T>(                            \
         const std::string &, const std::string &, const std::string) noexcept;
 
-ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 } // end namespace core

@@ -288,103 +288,15 @@ void BP4Deserializer::ParseVariablesIndexPerStep(const BufferSTL &bufferSTL,
         switch (header.DataType)
         {
 
-        case (type_string):
-        {
-            DefineVariableInEngineIOPerStep<std::string>(header, engine, buffer,
-                                                         position, step);
-            break;
-        }
-
-        case (type_byte):
-        {
-            DefineVariableInEngineIOPerStep<signed char>(header, engine, buffer,
-                                                         position, step);
-            break;
-        }
-
-        case (type_short):
-        {
-            DefineVariableInEngineIOPerStep<short>(header, engine, buffer,
-                                                   position, step);
-            break;
-        }
-
-        case (type_integer):
-        {
-            DefineVariableInEngineIOPerStep<int>(header, engine, buffer,
-                                                 position, step);
-            break;
-        }
-
-        case (type_long):
-        {
-            DefineVariableInEngineIOPerStep<int64_t>(header, engine, buffer,
-                                                     position, step);
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            DefineVariableInEngineIOPerStep<unsigned char>(
-                header, engine, buffer, position, step);
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            DefineVariableInEngineIOPerStep<unsigned short>(
-                header, engine, buffer, position, step);
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            DefineVariableInEngineIOPerStep<unsigned int>(
-                header, engine, buffer, position, step);
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            DefineVariableInEngineIOPerStep<uint64_t>(header, engine, buffer,
-                                                      position, step);
-            break;
-        }
-
-        case (type_real):
-        {
-            DefineVariableInEngineIOPerStep<float>(header, engine, buffer,
-                                                   position, step);
-            break;
-        }
-
-        case (type_double):
-        {
-            DefineVariableInEngineIOPerStep<double>(header, engine, buffer,
-                                                    position, step);
-            break;
-        }
-
-        case (type_long_double):
-        {
-            DefineVariableInEngineIOPerStep<long double>(header, engine, buffer,
-                                                         position, step);
-            break;
-        }
-
-        case (type_complex):
-        {
-            DefineVariableInEngineIOPerStep<std::complex<float>>(
-                header, engine, buffer, position, step);
-            break;
-        }
-
-        case (type_double_complex):
-        {
-            DefineVariableInEngineIOPerStep<std::complex<double>>(
-                header, engine, buffer, position, step);
-            break;
-        }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        DefineVariableInEngineIOPerStep<T>(header, engine, buffer, position,   \
+                                           step);                              \
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_STDTYPE_1ARG(make_case)
+#undef make_case
 
         } // end switch
     };
@@ -469,91 +381,14 @@ void BP4Deserializer::ParseVariablesIndexPerStep(const BufferSTL &bufferSTL,
         switch (header.DataType)
         {
 
-        case (type_string):
-        {
-            DefineVariableInIO<std::string>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_byte):
-        {
-            DefineVariableInIO<signed char>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_short):
-        {
-            DefineVariableInIO<short>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_integer):
-        {
-            DefineVariableInIO<int>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_long):
-        {
-            DefineVariableInIO<int64_t>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            DefineVariableInIO<unsigned char>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            DefineVariableInIO<unsigned short>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            DefineVariableInIO<unsigned int>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            DefineVariableInIO<uint64_t>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_real):
-        {
-            DefineVariableInIO<float>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_double):
-        {
-            DefineVariableInIO<double>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_long_double):
-        {
-            DefineVariableInIO<long double>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_complex):
-        {
-            DefineVariableInIO<std::complex<float>>(header, io, buffer,
-                                                    position);
-            break;
-        }
-
-        case (type_double_complex):
-        {
-            DefineVariableInIO<std::complex<double>>(header, io, buffer,
-                                                     position);
-            break;
-        }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        DefineVariableInIO<T>(header, io, buffer, position);
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(make_case)
+#undef make_case
 
         } // end switch
     };
@@ -637,89 +472,17 @@ void BP4Deserializer::ParseAttributesIndexPerStep(const BufferSTL &bufferSTL,
         switch (header.DataType)
         {
 
-        case (type_string):
-        {
-            DefineAttributeInEngineIO<std::string>(header, engine, buffer,
-                                                   position);
-            break;
-        }
-
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        DefineAttributeInEngineIO<T>(header, engine, buffer, position);        \
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(make_case)
+#undef make_case
         case (type_string_array):
         {
             DefineAttributeInEngineIO<std::string>(header, engine, buffer,
-                                                   position);
-            break;
-        }
-
-        case (type_byte):
-        {
-            DefineAttributeInEngineIO<signed char>(header, engine, buffer,
-                                                   position);
-            break;
-        }
-
-        case (type_short):
-        {
-            DefineAttributeInEngineIO<short>(header, engine, buffer, position);
-            break;
-        }
-
-        case (type_integer):
-        {
-            DefineAttributeInEngineIO<int>(header, engine, buffer, position);
-            break;
-        }
-
-        case (type_long):
-        {
-            DefineAttributeInEngineIO<int64_t>(header, engine, buffer,
-                                               position);
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            DefineAttributeInEngineIO<unsigned char>(header, engine, buffer,
-                                                     position);
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            DefineAttributeInEngineIO<unsigned short>(header, engine, buffer,
-                                                      position);
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            DefineAttributeInEngineIO<unsigned int>(header, engine, buffer,
-                                                    position);
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            DefineAttributeInEngineIO<uint64_t>(header, engine, buffer,
-                                                position);
-            break;
-        }
-
-        case (type_real):
-        {
-            DefineAttributeInEngineIO<float>(header, engine, buffer, position);
-            break;
-        }
-
-        case (type_double):
-        {
-            DefineAttributeInEngineIO<double>(header, engine, buffer, position);
-            break;
-        }
-
-        case (type_long_double):
-        {
-            DefineAttributeInEngineIO<long double>(header, engine, buffer,
                                                    position);
             break;
         }
@@ -761,81 +524,18 @@ void BP4Deserializer::ParseAttributesIndexPerStep(const BufferSTL &bufferSTL,
         switch (header.DataType)
         {
 
-        case (type_string):
-        {
-            DefineAttributeInIO<std::string>(header, io, buffer, position);
-            break;
-        }
+#define make_case(T)                                                           \
+    case (TypeTraits<T>::type_enum):                                           \
+    {                                                                          \
+        DefineAttributeInIO<T>(header, io, buffer, position);                  \
+        break;                                                                 \
+    }
+            ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_1ARG(make_case)
+#undef make_case
 
         case (type_string_array):
         {
             DefineAttributeInIO<std::string>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_byte):
-        {
-            DefineAttributeInIO<signed char>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_short):
-        {
-            DefineAttributeInIO<short>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_integer):
-        {
-            DefineAttributeInIO<int>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_long):
-        {
-            DefineAttributeInIO<int64_t>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_byte):
-        {
-            DefineAttributeInIO<unsigned char>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_short):
-        {
-            DefineAttributeInIO<unsigned short>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_integer):
-        {
-            DefineAttributeInIO<unsigned int>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_unsigned_long):
-        {
-            DefineAttributeInIO<uint64_t>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_real):
-        {
-            DefineAttributeInIO<float>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_double):
-        {
-            DefineAttributeInIO<double>(header, io, buffer, position);
-            break;
-        }
-
-        case (type_long_double):
-        {
-            DefineAttributeInIO<long double>(header, io, buffer, position);
             break;
         }
 
@@ -884,7 +584,7 @@ BP4Deserializer::PerformGetsVariablesSubFileInfo(core::IO &io)
         subFileInfoPair.second =                                               \
             GetSubFileInfo(*io.InquireVariable<T>(variableName));              \
     }
-        ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
     }
     return m_DeferredVariablesMap;
@@ -912,7 +612,7 @@ void BP4Deserializer::ClipMemory(const std::string &variableName, core::IO &io,
                                          m_IsRowMajor, m_ReverseDimensions);   \
         }                                                                      \
     }
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 }
 
@@ -933,7 +633,7 @@ void BP4Deserializer::ClipMemory(const std::string &variableName, core::IO &io,
     template void BP4Deserializer::GetValueFromMetadata(                       \
         core::Variable<T> &variable, T *) const;
 
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 #define declare_template_instantiation(T)                                      \
@@ -964,7 +664,7 @@ ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
         core::Variable<T> &, typename core::Variable<T>::Info &,               \
         const helper::SubStreamBoxInfo &, const bool, const size_t);
 
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 } // end namespace format

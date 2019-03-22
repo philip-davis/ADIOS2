@@ -28,100 +28,65 @@
 #include "py11Variable.h"
 
 #ifdef ADIOS2_HAVE_MPI
-adios2::py11::ADIOS ADIOSInitConfig(const std::string &configFile,
-                                    pybind11::object &comm,
-                                    const bool debugMode)
+
+namespace pybind11
 {
-    MPI_Comm *mpiCommPtr = PyMPIComm_Get(comm.ptr());
-
-    if (import_mpi4py() < 0)
-    {
-        throw std::runtime_error("ERROR: could not import mpi4py "
-                                 "communicator, in call to ADIOS "
-                                 "constructor\n");
-    }
-
-    if (mpiCommPtr == nullptr)
-    {
-        throw std::runtime_error("ERROR: mpi4py communicator is null, in call "
-                                 "to ADIOS constructor\n");
-    }
-    return adios2::py11::ADIOS(configFile, *mpiCommPtr, debugMode);
-}
-
-adios2::py11::ADIOS ADIOSInit(pybind11::object &comm, const bool debugMode)
+namespace detail
 {
-    MPI_Comm *mpiCommPtr = PyMPIComm_Get(comm.ptr());
+template <>
+struct type_caster<adios2::py11::MPI4PY_Comm>
+{
+public:
+    /**
+     * This macro establishes the name 'MPI4PY_Comm' in
+     * function signatures and declares a local variable
+     * 'value' of type MPI4PY_Comm
+     */
+    PYBIND11_TYPE_CASTER(adios2::py11::MPI4PY_Comm, _("MPI4PY_Comm"));
 
-    if (import_mpi4py() < 0)
+    /**
+     * Conversion part 1 (Python->C++): convert a PyObject into a MPI4PY_Comm
+     * instance or return false upon failure. The second argument
+     * indicates whether implicit conversions should be applied.
+     */
+    bool load(handle src, bool)
     {
-        throw std::runtime_error("ERROR: could not import mpi4py "
-                                 "communicator, in call to ADIOS "
-                                 "constructor\n");
-    }
+        // If src is not actually a MPI4PY communicator, the next
+        // call returns nullptr, and we return false to indicate the conversion
+        // failed.
 
-    if (mpiCommPtr == nullptr)
-    {
-        throw std::runtime_error("ERROR: mpi4py communicator is null, in call "
-                                 "to ADIOS constructor\n");
+        MPI_Comm *mpiCommPtr = PyMPIComm_Get(src.ptr());
+        if (mpiCommPtr == nullptr)
+        {
+            return false;
+        }
+        value.comm = *mpiCommPtr;
+        return true;
     }
-    return adios2::py11::ADIOS(*mpiCommPtr, debugMode);
-}
+};
+} // namespace detail
+} // namespace pybind11
+
+#endif
+
+#ifdef ADIOS2_HAVE_MPI
 
 adios2::py11::File Open(const std::string &name, const std::string mode,
-                        pybind11::object &comm, const std::string enginetype)
+                        adios2::py11::MPI4PY_Comm comm,
+                        const std::string enginetype)
 {
-    MPI_Comm *mpiCommPtr = PyMPIComm_Get(comm.ptr());
-
-    if (import_mpi4py() < 0)
-    {
-        throw std::runtime_error("ERROR: could not import mpi4py "
-                                 "communicator, in call to ADIOS "
-                                 "constructor\n");
-    }
-
-    if (mpiCommPtr == nullptr)
-    {
-        throw std::runtime_error("ERROR: mpi4py communicator is null, in call "
-                                 "to ADIOS constructor\n");
-    }
-    return adios2::py11::File(name, mode, *mpiCommPtr, enginetype);
+    return adios2::py11::File(name, mode, comm, enginetype);
 }
 
 adios2::py11::File OpenConfig(const std::string &name, const std::string mode,
-                              pybind11::object &comm,
+                              adios2::py11::MPI4PY_Comm comm,
                               const std::string &configfile,
                               const std::string ioinconfigfile)
 {
-    MPI_Comm *mpiCommPtr = PyMPIComm_Get(comm.ptr());
-
-    if (import_mpi4py() < 0)
-    {
-        throw std::runtime_error("ERROR: could not import mpi4py "
-                                 "communicator, in call to open\n");
-    }
-
-    if (mpiCommPtr == nullptr)
-    {
-        throw std::runtime_error("ERROR: mpi4py communicator is null, in call "
-                                 "to ADIOS constructor\n");
-    }
-    return adios2::py11::File(name, mode, *mpiCommPtr, configfile,
-                              ioinconfigfile);
+    return adios2::py11::File(name, mode, comm, configfile, ioinconfigfile);
 }
 
 #else
-adios2::py11::ADIOS ADIOSInitConfig(const std::string configFile,
-                                    const bool debugMode)
-{
-    return adios2::py11::ADIOS(configFile, debugMode);
-}
-
-adios2::py11::ADIOS ADIOSInit(const bool debugMode)
-{
-    return adios2::py11::ADIOS(debugMode);
-}
-
 adios2::py11::File Open(const std::string &name, const std::string mode,
                         const std::string enginetype)
 {
@@ -150,6 +115,7 @@ PYBIND11_MODULE(adios2, m)
     m.attr("DebugOFF") = false;
     m.attr("ConstantDims") = true;
     m.attr("VariableDims") = false;
+    m.attr("LocalValueDim") = adios2::LocalValueDim;
 
     // enum classes
     pybind11::enum_<adios2::Mode>(m, "Mode")
@@ -158,6 +124,14 @@ PYBIND11_MODULE(adios2, m)
         .value("Append", adios2::Mode::Append)
         .value("Deferred", adios2::Mode::Deferred)
         .value("Sync", adios2::Mode::Sync)
+        .export_values();
+
+    pybind11::enum_<adios2::ShapeID>(m, "ShapeID")
+        .value("Unknown", adios2::ShapeID::Unknown)
+        .value("GlobalValue", adios2::ShapeID::GlobalValue)
+        .value("GlobalArray", adios2::ShapeID::GlobalArray)
+        .value("LocalValue", adios2::ShapeID::LocalValue)
+        .value("LocalArray", adios2::ShapeID::LocalArray)
         .export_values();
 
     pybind11::enum_<adios2::StepMode>(m, "StepMode")
@@ -175,16 +149,6 @@ PYBIND11_MODULE(adios2, m)
         .export_values();
 
 #ifdef ADIOS2_HAVE_MPI
-    m.def("ADIOS", &ADIOSInit,
-          "adios2 module starting point, creates an ADIOS class object",
-          pybind11::arg("object"), pybind11::arg("debugMode") = true);
-
-    m.def("ADIOS", &ADIOSInitConfig, "adios2 module starting point, creates an "
-                                     "ADIOS class object including a runtime "
-                                     "config file",
-          pybind11::arg("configFile") = "", pybind11::arg("object"),
-          pybind11::arg("debugMode") = true);
-
     m.def("open", &Open, pybind11::arg("name"), pybind11::arg("mode"),
           pybind11::arg("comm"), pybind11::arg("engine_type") = "BPFile", R"md(
           Simple API MPI open, based on python IO. 
@@ -239,15 +203,6 @@ PYBIND11_MODULE(adios2, m)
     )md");
 
 #else
-    m.def("ADIOS", &ADIOSInit,
-          "adios2 module starting point NON MPI, creates an ADIOS class object",
-          pybind11::arg("debugMode") = true);
-
-    m.def("ADIOS", &ADIOSInitConfig,
-          "adios2 module starting point NON MPI, creates an "
-          "ADIOS class object including a runtime config file",
-          pybind11::arg("configFile") = "", pybind11::arg("debugMode") = true);
-
     m.def("open", &Open, "High-level API, file object open",
           pybind11::arg("name"), pybind11::arg("mode"),
           pybind11::arg("engine_type") = "BPFile");
@@ -258,7 +213,7 @@ PYBIND11_MODULE(adios2, m)
           pybind11::arg("config_file"), pybind11::arg("io_in_config_file"));
 #endif
 
-    pybind11::class_<adios2::py11::ADIOS>(m, "py11_ADIOS")
+    pybind11::class_<adios2::py11::ADIOS>(m, "ADIOS")
         .def("__nonzero__",
              [](const adios2::py11::ADIOS &adios) {
                  if (adios)
@@ -270,6 +225,25 @@ PYBIND11_MODULE(adios2, m)
                      return false;
                  };
              })
+#ifdef ADIOS2_HAVE_MPI
+        .def(pybind11::init<const adios2::py11::MPI4PY_Comm, const bool>(),
+             "adios2 module starting point, constructs an ADIOS class object",
+             pybind11::arg("comm"), pybind11::arg("debugMode") = true)
+        .def(pybind11::init<const std::string &,
+                            const adios2::py11::MPI4PY_Comm, const bool>(),
+             "adios2 module starting point, constructs an ADIOS class object",
+             pybind11::arg("configFile"), pybind11::arg("comm"),
+             pybind11::arg("debugMode") = true)
+#else
+        .def(pybind11::init<const bool>(), "adios2 module starting point "
+                                           "non-MPI, constructs an ADIOS class "
+                                           "object",
+             pybind11::arg("debugMode") = true)
+        .def(pybind11::init<const std::string &, const bool>(),
+             "adios2 module starting point non-MPI, constructs an ADIOS class "
+             "object",
+             pybind11::arg("configFile"), pybind11::arg("debugMode") = true)
+#endif
         .def("DeclareIO", &adios2::py11::ADIOS::DeclareIO,
              "spawn IO object component returning a IO object with a unique "
              "name, throws an exception if IO with the same name is declared "
@@ -366,6 +340,12 @@ PYBIND11_MODULE(adios2, m)
         .def("Open", (adios2::py11::Engine (adios2::py11::IO::*)(
                          const std::string &, const int)) &
                          adios2::py11::IO::Open)
+#ifdef ADIOS2_HAVE_MPI
+        .def("Open", (adios2::py11::Engine (adios2::py11::IO::*)(
+                         const std::string &, const int,
+                         adios2::py11::MPI4PY_Comm comm)) &
+                         adios2::py11::IO::Open)
+#endif
         .def("AvailableVariables", &adios2::py11::IO::AvailableVariables)
         .def("AvailableAttributes", &adios2::py11::IO::AvailableAttributes)
         .def("FlushAll", &adios2::py11::IO::FlushAll)
@@ -397,7 +377,8 @@ PYBIND11_MODULE(adios2, m)
         .def("Type", &adios2::py11::Variable::Type)
         .def("Sizeof", &adios2::py11::Variable::Sizeof)
         .def("ShapeID", &adios2::py11::Variable::ShapeID)
-        .def("Shape", &adios2::py11::Variable::Shape)
+        .def("Shape", &adios2::py11::Variable::Shape,
+             pybind11::arg("step") = adios2::EngineCurrentStep)
         .def("Start", &adios2::py11::Variable::Start)
         .def("Count", &adios2::py11::Variable::Count)
         .def("Steps", &adios2::py11::Variable::Steps)
@@ -603,8 +584,10 @@ PYBIND11_MODULE(adios2, m)
                           const adios2::Dims &, const bool)) &
                           adios2::py11::File::Write,
              pybind11::arg("name"), pybind11::arg("array"),
-             pybind11::arg("shape"), pybind11::arg("start"),
-             pybind11::arg("count"), pybind11::arg("end_step") = false,
+             pybind11::arg("shape") = adios2::Dims(),
+             pybind11::arg("start") = adios2::Dims(),
+             pybind11::arg("count") = adios2::Dims(),
+             pybind11::arg("end_step") = false,
              R"md(
              writes a self-describing array (numpy) variable
 
@@ -631,6 +614,46 @@ PYBIND11_MODULE(adios2, m)
                      end current step, begin next step and flush (default = false).
         )md")
 
+        .def("write",
+             (void (adios2::py11::File::*)(
+                 const std::string &, const pybind11::array &, const bool)) &
+                 adios2::py11::File::Write,
+             pybind11::arg("name"), pybind11::arg("array"),
+             pybind11::arg("end_step") = false, R"md(
+				             writes a self-describing single value array (numpy) variable
+
+				             Parameters
+				                 name
+				                     variable name
+
+				                 array: numpy 
+				                     variable data single value
+
+				                 endstep 
+				                     end current step, begin next step and flush 
+				                     (default = false).
+				        )md")
+
+        .def("write",
+             (void (adios2::py11::File::*)(const std::string &,
+                                           const std::string &, const bool)) &
+                 adios2::py11::File::Write,
+             pybind11::arg("name"), pybind11::arg("string"),
+             pybind11::arg("end_step") = false, R"md(
+				             writes a self-describing single value string variable
+
+				             Parameters
+				                 name
+				                     variable name
+
+				                 string 
+				                     variable data single value
+
+				                 endstep 
+				                     end current step, begin next step and flush 
+				                     (default = false).
+				        )md")
+
         .def("write_attribute",
              (void (adios2::py11::File::*)(
                  const std::string &, const pybind11::array &,
@@ -641,26 +664,27 @@ PYBIND11_MODULE(adios2, m)
              pybind11::arg("separator") = "/",
              pybind11::arg("end_step") = false,
              R"md(
-		             writes a self-describing single value array (numpy) variable
+								             writes a self-describing single value array (numpy) variable
 
-		             Parameters
-		                 name
-		                     attribute name
+								             Parameters
+								                 name
+								                     attribute name
 
-		                 array: numpy 
-		                     attribute numpy array data
+								                 array: numpy 
+								                     attribute numpy array data
 
-						 variablename:
-                             if attribute is associated with a variable
+												 variablename:
+						                             if attribute is associated with a variable
 
-                         separator:
-                             concatenation string between variablename and attribute
-                             e.g. variablename + separator + name
-                                  var/units. Not used if variablename is empty 
-		                 endstep 
-		                     end current step, begin next step and flush 
-		                     (default = false).
-		        )md")
+						                         separator:
+						                             concatenation string between variablename and attribute
+						                             e.g. variablename + separator + name
+						                                  var/units. Not used if variablename is empty 
+								                 endstep 
+								                     end current step, begin next step and flush 
+								                     (default = false).
+								        )md")
+
         .def("write_attribute",
              (void (adios2::py11::File::*)(
                  const std::string &, const std::string &, const std::string &,
@@ -722,46 +746,6 @@ PYBIND11_MODULE(adios2, m)
 						 end current step, begin next step and flush 
 						 (default = false).
 			)md")
-
-        .def("write",
-             (void (adios2::py11::File::*)(
-                 const std::string &, const pybind11::array &, const bool)) &
-                 adios2::py11::File::Write,
-             pybind11::arg("name"), pybind11::arg("array"),
-             pybind11::arg("end_step") = false, R"md(
-             writes a self-describing single value array (numpy) variable
-
-             Parameters
-                 name
-                     variable name
-
-                 array: numpy 
-                     variable data single value
-
-                 endstep 
-                     end current step, begin next step and flush 
-                     (default = false).
-        )md")
-
-        .def("write",
-             (void (adios2::py11::File::*)(const std::string &,
-                                           const std::string &, const bool)) &
-                 adios2::py11::File::Write,
-             pybind11::arg("name"), pybind11::arg("string"),
-             pybind11::arg("end_step") = false, R"md(
-             writes a self-describing single value string variable
-
-             Parameters
-                 name
-                     variable name
-
-                 string 
-                     variable data single value
-
-                 endstep 
-                     end current step, begin next step and flush 
-                     (default = false).
-        )md")
 
         .def("read_string", (std::vector<std::string> (adios2::py11::File::*)(
                                 const std::string &)) &

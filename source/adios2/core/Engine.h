@@ -103,6 +103,19 @@ public:
     virtual size_t CurrentStep() const;
 
     /**
+     * Put signature that pre-allocates a Variable in Buffer returning a Span of
+     * the payload memory from variable.m_Count
+     * @param variable input variable to be allocated
+     * @param bufferID
+     * @param value
+     * @return span to the buffer internal memory that be populated by the
+     * application
+     */
+    template <class T>
+    typename Variable<T>::Span &
+    Put(Variable<T> &variable, const size_t bufferID = 0, const T &value = T{});
+
+    /**
      * @brief Put associates variable and data into adios2 in Engine Write mode.
      * Check your Engine documentation for specific behavior.
      * In general, it will register variable metadata and data for buffering.
@@ -158,7 +171,7 @@ public:
      * @param datum contains user defined single value
      */
     template <class T>
-    void Put(Variable<T> &variable, const T &datum);
+    void Put(Variable<T> &variable, const T &datum, const Mode launch);
 
     /**
      * @brief Put version for single value datum using variable name. Throws
@@ -181,7 +194,8 @@ public:
      * </pre>
      */
     template <class T>
-    void Put(const std::string &variableName, const T &datum);
+    void Put(const std::string &variableName, const T &datum,
+             const Mode launch);
 
     /**
      * @brief Get associates an existing variable selections and populates data
@@ -386,6 +400,16 @@ public:
     AllStepsBlocksInfo(const Variable<T> &variable) const;
 
     /**
+     * This function is internal, for public interface use
+     * Variable<T>::AllStepsBlocksInfo
+     * @param variable
+     * @return
+     */
+    template <class T>
+    std::vector<std::vector<typename Variable<T>::Info>>
+    AllRelativeStepsBlocksInfo(const Variable<T> &variable) const;
+
+    /**
      * Extracts all available blocks information for a particular
      * variable and step.
      * Valid in read mode only.
@@ -397,6 +421,10 @@ public:
     template <class T>
     std::vector<typename Variable<T>::Info>
     BlocksInfo(const Variable<T> &variable, const size_t step) const;
+
+    template <class T>
+    T *BufferData(const size_t payloadOffset,
+                  const size_t bufferID = 0) noexcept;
 
 protected:
     /** from ADIOS class passed to Engine created with Open
@@ -424,10 +452,19 @@ protected:
     /** From IO AddTransport */
     virtual void InitTransports();
 
+// Put
+#define declare_type(T)                                                        \
+    virtual void DoPut(Variable<T> &variable,                                  \
+                       typename Variable<T>::Span &span, const size_t blockID, \
+                       const T &value);
+
+    ADIOS2_FOREACH_PRIMITIVE_STDTYPE_1ARG(declare_type)
+#undef declare_type
+
 #define declare_type(T)                                                        \
     virtual void DoPutSync(Variable<T> &, const T *);                          \
     virtual void DoPutDeferred(Variable<T> &, const T *);
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
 // Get
@@ -435,7 +472,7 @@ protected:
     virtual void DoGetSync(Variable<T> &, T *);                                \
     virtual void DoGetDeferred(Variable<T> &, T *);                            \
     virtual typename Variable<T>::Info *DoGetBlockSync(Variable<T> &);
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
     virtual void DoClose(const int transportIndex) = 0;
@@ -455,10 +492,20 @@ protected:
     virtual std::map<size_t, std::vector<typename Variable<T>::Info>>          \
     DoAllStepsBlocksInfo(const Variable<T> &variable) const;                   \
                                                                                \
+    virtual std::vector<std::vector<typename Variable<T>::Info>>               \
+    DoAllRelativeStepsBlocksInfo(const Variable<T> &variable) const;           \
+                                                                               \
     virtual std::vector<typename Variable<T>::Info> DoBlocksInfo(              \
         const Variable<T> &variable, const size_t step) const;
 
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+
+#define declare_type(T, L)                                                     \
+    virtual T *DoBufferData_##L(const size_t payloadPosition,                  \
+                                const size_t bufferID) noexcept;
+
+    ADIOS2_FOREACH_PRIMITVE_STDTYPE_2ARGS(declare_type)
 #undef declare_type
 
 private:
@@ -494,8 +541,9 @@ private:
     extern template void Engine::Put<T>(const std::string &, const T *,        \
                                         const Mode);                           \
                                                                                \
-    extern template void Engine::Put<T>(Variable<T> &, const T &);             \
-    extern template void Engine::Put<T>(const std::string &, const T &);       \
+    extern template void Engine::Put<T>(Variable<T> &, const T &, const Mode); \
+    extern template void Engine::Put<T>(const std::string &, const T &,        \
+                                        const Mode);                           \
                                                                                \
     extern template void Engine::Get<T>(Variable<T> &, T *, const Mode);       \
     extern template void Engine::Get<T>(const std::string &, T *, const Mode); \
@@ -518,12 +566,22 @@ private:
         const std::string &variableName, const std::string hint);              \
                                                                                \
     extern template std::map<size_t, std::vector<typename Variable<T>::Info>>  \
-    Engine::AllStepsBlocksInfo(const Variable<T> &variable) const;             \
+    Engine::AllStepsBlocksInfo(const Variable<T> &) const;                     \
+                                                                               \
+    extern template std::vector<std::vector<typename Variable<T>::Info>>       \
+    Engine::AllRelativeStepsBlocksInfo(const Variable<T> &) const;             \
                                                                                \
     extern template std::vector<typename Variable<T>::Info>                    \
-    Engine::BlocksInfo(const Variable<T> &variable, const size_t step) const;
+    Engine::BlocksInfo(const Variable<T> &, const size_t) const;
 
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
+#undef declare_template_instantiation
+
+#define declare_template_instantiation(T)                                      \
+    extern template typename Variable<T>::Span &Engine::Put(                   \
+        Variable<T> &, const size_t, const T &);
+
+ADIOS2_FOREACH_PRIMITIVE_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
 } // end namespace core

@@ -13,7 +13,6 @@
 #define ADIOS2_ENGINE_DATAMAN_DATAMANREADER_H_
 
 #include "DataManCommon.h"
-#include "adios2/toolkit/format/dataman/DataManSerializer.tcc"
 
 namespace adios2
 {
@@ -41,10 +40,7 @@ private:
     size_t m_FinalStep = std::numeric_limits<size_t>::max();
 
     format::DataManSerializer m_DataManSerializer;
-    std::unordered_map<
-        size_t,
-        std::shared_ptr<std::vector<format::DataManSerializer::DataManVar>>>
-        m_MetaDataMap;
+    format::DmvVecPtrMap m_MetaDataMap;
 
     void Init();
     void IOThread(std::shared_ptr<transportman::WANMan> man);
@@ -57,8 +53,12 @@ private:
     DoAllStepsBlocksInfo(const Variable<T> &variable) const final;             \
     std::vector<typename Variable<T>::Info> DoBlocksInfo(                      \
         const Variable<T> &variable, const size_t step) const final;
-    ADIOS2_FOREACH_TYPE_1ARG(declare_type)
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
+
+    template <typename T>
+    void AccumulateMinMax(T &min, T &max, const std::vector<char> &minVec,
+                          const std::vector<char> &maxVec) const;
 
     template <class T>
     void GetSyncCommon(Variable<T> &variable, T *data);
