@@ -13,12 +13,15 @@
 #include <algorithm> // std::transform
 #include <iostream>  //std::cout Warnings
 
-#include "adios2/ADIOSTypes.h"            //PathSeparator
+#include "adios2/common/ADIOSTypes.h"     //PathSeparator
 #include "adios2/helper/adiosFunctions.h" //CreateDirectory, StringToTimeUnit,
 
-#include "adios2/toolkit/format/bp4/operation/BP4MGARD.h"
-#include "adios2/toolkit/format/bp4/operation/BP4SZ.h"
-#include "adios2/toolkit/format/bp4/operation/BP4Zfp.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPBZIP2.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPBlosc.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPMGARD.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPPNG.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPSZ.h"
+#include "adios2/toolkit/format/bpOperation/compress/BPZFP.h"
 
 namespace adios2
 {
@@ -26,15 +29,16 @@ namespace format
 {
 
 const std::set<std::string> BP4Base::m_TransformTypes = {
-    {"unknown", "none", "identity", "sz", "zfp", "mgard"}};
+    {"unknown", "none", "identity", "bzip2", "sz", "zfp", "mgard", "png",
+     "blosc"}};
 
 const std::map<int, std::string> BP4Base::m_TransformTypesToNames = {
     {transform_unknown, "unknown"},   {transform_none, "none"},
     {transform_identity, "identity"}, {transform_sz, "sz"},
     {transform_zfp, "zfp"},           {transform_mgard, "mgard"},
-    //{transform_mgard, "mgard"},
+    {transform_png, "png"},           {transform_bzip2, "bzip2"},
+    {transform_blosc, "blosc"}
     // {transform_zlib, "zlib"},
-    //    {transform_bzip2, "bzip2"},
     //    {transform_szip, "szip"},
     //    {transform_isobar, "isobar"},
     //    {transform_aplod, "aplod"},
@@ -42,14 +46,13 @@ const std::map<int, std::string> BP4Base::m_TransformTypesToNames = {
 
     //    {transform_sz, "sz"},
     //    {transform_lz4, "lz4"},
-    //    {transform_blosc, "blosc"},
 };
 
 BP4Base::BP4Base(MPI_Comm mpiComm, const bool debugMode)
 : m_MPIComm(mpiComm), m_DebugMode(debugMode)
 {
-    MPI_Comm_rank(m_MPIComm, &m_RankMPI);
-    MPI_Comm_size(m_MPIComm, &m_SizeMPI);
+    SMPI_Comm_rank(m_MPIComm, &m_RankMPI);
+    SMPI_Comm_size(m_MPIComm, &m_SizeMPI);
     m_Profiler.IsActive = true; // default
 }
 
@@ -72,6 +75,25 @@ void BP4Base::InitParameters(const Params &parameters)
         if (key == "profile")
         {
             InitParameterProfile(value);
+        }
+        else if (key == "opentimeoutsecs")
+        {
+            m_OpenTimeoutSecs = InitParameterFloat(value, "OpenTimeoutSecs");
+
+            if (m_OpenTimeoutSecs < 0.0)
+            {
+                m_OpenTimeoutSecs = 2144448000.0f; // int-friendly 68 years
+            }
+        }
+        else if (key == "beginsteppollingfrequencysecs")
+        {
+            m_BeginStepPollingFrequencySecs =
+                InitParameterFloat(value, "BeginStepPollingFrequencySecs");
+            if (m_BeginStepPollingFrequencySecs < 0.0)
+            {
+                m_BeginStepPollingFrequencySecs = 1.0; // a second
+            }
+            m_BeginStepPollingFrequencyIsSet = true;
         }
         else if (key == "profileunits")
         {
@@ -97,7 +119,11 @@ void BP4Base::InitParameters(const Params &parameters)
         }
         else if (key == "statslevel")
         {
-            InitParameterStatLevel(value);
+            InitParameterStatsLevel(value);
+        }
+        else if (key == "statsblocksize")
+        {
+            m_StatsBlockSize = InitParameterSizeT(value, "StatsBlockSize");
         }
         else if (key == "collectivemetadata")
         {
@@ -275,6 +301,7 @@ size_t BP4Base::GetBPIndexSizeInData(const std::string &variableName,
                                      const Dims &count) const noexcept
 {
     size_t indexSize = 23; // header
+    indexSize += 4 + 32;   // "[VMD" and padded " *VMD]" up to 31 char length
     indexSize += variableName.size();
 
     // characteristics 3 and 4, check variable number of dimensions
@@ -294,15 +321,20 @@ size_t BP4Base::GetBPIndexSizeInData(const std::string &variableName,
 
     // characteristic statistics
     indexSize += 5;        // count + length
-    if (m_StatsLevel == 0) // default, only min and max and dimensions
+    if (m_StatsLevel == 1) // default, only min and max and dimensions
     {
-        indexSize += 2 * (2 * sizeof(uint64_t) + 1);
-        indexSize += 1 + 1; // id
-
-        indexSize += 28 * dimensions + 1;
+        const size_t nElems = helper::GetTotalSize(count);
+        const size_t nSubblocks = nElems / m_StatsBlockSize;
+        indexSize += 2 * (nSubblocks + 1) * (2 * sizeof(uint64_t) + 1);
+        indexSize += dimensions * 2;
+        indexSize += 1 + 2; // id + # of subblocks field
     }
+    // dimensions
+    indexSize += 28 * dimensions + 1;
 
-    return indexSize + 12; // extra 12 bytes in case of attributes
+    // extra 12 bytes for attributes in case of last variable
+    // extra 4 bytes for PGI] in case of last variable
+    return indexSize + 12 + 4;
 }
 
 void BP4Base::ResetBuffer(BufferSTL &bufferSTL,
@@ -326,8 +358,8 @@ BP4Base::ResizeResult BP4Base::ResizeBuffer(const size_t dataIn,
                                             const std::string hint)
 {
     ProfilerStart("buffering");
-    const size_t currentCapacity = m_Data.m_Buffer.capacity();
-    const size_t requiredCapacity = dataIn + m_Data.m_Position;
+    const size_t currentSize = m_Data.m_Buffer.size();
+    const size_t requiredSize = dataIn + m_Data.m_Position;
 
     ResizeResult result = ResizeResult::Unchanged;
 
@@ -343,13 +375,13 @@ BP4Base::ResizeResult BP4Base::ResizeBuffer(const size_t dataIn,
             hint + "\n");
     }
 
-    if (requiredCapacity <= currentCapacity)
+    if (requiredSize <= currentSize)
     {
         // do nothing, unchanged is default
     }
-    else if (requiredCapacity > m_MaxBufferSize)
+    else if (requiredSize > m_MaxBufferSize)
     {
-        if (currentCapacity < m_MaxBufferSize)
+        if (currentSize < m_MaxBufferSize)
         {
             m_Data.Resize(m_MaxBufferSize, " when resizing buffer to " +
                                                std::to_string(m_MaxBufferSize) +
@@ -359,12 +391,12 @@ BP4Base::ResizeResult BP4Base::ResizeBuffer(const size_t dataIn,
     }
     else // buffer must grow
     {
-        if (currentCapacity < m_MaxBufferSize)
+        if (currentSize < m_MaxBufferSize)
         {
-            const size_t nextSize = std::min(
-                m_MaxBufferSize,
-                helper::NextExponentialSize(requiredCapacity, currentCapacity,
-                                            m_GrowthFactor));
+            const size_t nextSize =
+                std::min(m_MaxBufferSize,
+                         helper::NextExponentialSize(requiredSize, currentSize,
+                                                     m_GrowthFactor));
             m_Data.Resize(nextSize, " when resizing buffer to " +
                                         std::to_string(nextSize) + "bytes, " +
                                         hint);
@@ -601,7 +633,44 @@ void BP4Base::InitParameterThreads(const std::string value)
     m_Threads = static_cast<unsigned int>(threads);
 }
 
-void BP4Base::InitParameterStatLevel(const std::string value)
+void BP4Base::InitParameterAsyncThreads(const std::string value)
+{
+    int asyncThreads = -1;
+
+    if (m_DebugMode)
+    {
+        bool success = true;
+        std::string description;
+
+        try
+        {
+            asyncThreads = std::stoi(value);
+        }
+        catch (std::exception &e)
+        {
+            success = false;
+            description = std::string(e.what());
+        }
+
+        if (!success || asyncThreads < 0)
+        {
+            throw std::invalid_argument(
+                "ERROR: value in AsyncThreads=value in IO SetParameters must "
+                "be "
+                "an integer >= 0 (default = 1, no async = 0) \nadditional "
+                "description: " +
+                description + "\n, in call to Open\n");
+        }
+    }
+    else
+    {
+        asyncThreads = std::stoi(value);
+    }
+
+    m_AsyncThreads = static_cast<unsigned int>(asyncThreads);
+}
+
+void BP4Base::InitParameterStatsLevel(const std::string value)
 {
     int level = -1;
 
@@ -620,11 +689,11 @@ void BP4Base::InitParameterStatLevel(const std::string value)
             description = std::string(e.what());
         }
 
-        if (!success || level < 0 || level > 5)
+        if (!success || level < 0 || level > 1)
         {
             throw std::invalid_argument(
-                "ERROR: value in Verbose=value in IO SetParameters must be "
-                "an integer in the range [0,5], \nadditional "
+                "ERROR: value in StatsLevel=value in IO SetParameters must be "
+                "an integer 0 or 1, \nadditional "
                 "description: " +
                 description + "\n, in call to Open\n");
         }
@@ -884,27 +953,118 @@ void BP4Base::InitParameterSubStreams(const std::string value)
     }
 }
 
-std::shared_ptr<BP4Operation>
-BP4Base::SetBP4Operation(const std::string type) const noexcept
+void BP4Base::InitParameterOpenTimeoutSecs(const std::string value)
 {
-    std::shared_ptr<BP4Operation> bp4Op;
+    bool success = true;
+    std::string description;
+
+    try
+    {
+        m_OpenTimeoutSecs = std::stof(value);
+    }
+    catch (std::exception &e)
+    {
+        success = false;
+        description = std::string(e.what());
+    }
+
+    if (!success)
+    {
+        throw std::invalid_argument("ERROR: m_TimeoutOpenSecs value: "
+                                    "could not convert number: " +
+                                    description + "\n, in call to Open\n");
+    }
+
+    if (m_OpenTimeoutSecs < 0.0)
+    {
+        m_OpenTimeoutSecs = std::numeric_limits<float>::max() / 10000;
+    }
+}
+
+float BP4Base::InitParameterFloat(const std::string value,
+                                  const std::string parameterName)
+{
+    bool success = true;
+    float retval = 0.0f;
+    std::string description;
+
+    try
+    {
+        retval = std::stof(value);
+    }
+    catch (std::exception &e)
+    {
+        success = false;
+        description = std::string(e.what());
+    }
+
+    if (!success)
+    {
+        throw std::invalid_argument(
+            "ERROR: Parameter " + parameterName + " value (" + value +
+            ") could not be converted to a float: " + description +
+            "\n, in call to Open\n");
+    }
+    return retval;
+}
+
+size_t BP4Base::InitParameterSizeT(const std::string value,
+                                   const std::string parameterName)
+{
+    bool success = true;
+    size_t retval = 0;
+    std::string description;
+
+    try
+    {
+        retval = std::stoull(value);
+    }
+    catch (std::exception &e)
+    {
+        success = false;
+        description = std::string(e.what());
+    }
+
+    if (!success)
+    {
+        throw std::invalid_argument(
+            "ERROR: Parameter " + parameterName + " value (" + value +
+            ") could not be converted to a unsigned long long: " + description +
+            "\n, in call to Open\n");
+    }
+    return retval;
+}
+
+std::shared_ptr<BPOperation>
+BP4Base::SetBPOperation(const std::string type) const noexcept
+{
+    std::shared_ptr<BPOperation> bpOp;
     if (type == "sz")
     {
-        bp4Op = std::make_shared<BP4SZ>();
+        bpOp = std::make_shared<BPSZ>();
     }
     else if (type == "zfp")
     {
-        bp4Op = std::make_shared<BP4Zfp>();
+        bpOp = std::make_shared<BPZFP>();
     }
     else if (type == "mgard")
     {
-        bp4Op = std::make_shared<BP4MGARD>();
+        bpOp = std::make_shared<BPMGARD>();
     }
     else if (type == "bzip2")
     {
-        // TODO
+        bpOp = std::make_shared<BPBZIP2>();
     }
-    return bp4Op;
+    else if (type == "png")
+    {
+        bpOp = std::make_shared<BPPNG>();
+    }
+    else if (type == "blosc")
+    {
+        bpOp = std::make_shared<BPBlosc>();
+    }
+
+    return bpOp;
 }
 
 // PRIVATE
@@ -931,7 +1091,8 @@ std::string BP4Base::GetBPSubStreamName(const std::string &name,
     const size_t index =
         m_Aggregator.m_IsActive ? m_Aggregator.m_SubStreamIndex : rank;
 
-    // const std::string bpRankName(bpName + ".dir" + PathSeparator + bpRoot +
+    // const std::string bpRankName(bpName + ".dir" + PathSeparator + bpRoot
+    // +
     //                             "." + std::to_string(index));
     /* the name of a data file starts with "data." */
     const std::string bpRankName(bpName + PathSeparator + "data." +
@@ -945,8 +1106,8 @@ std::string BP4Base::GetBPSubStreamName(const std::string &name,
         const std::vector<char> &, size_t &, const BP4Base::DataTypes,         \
         const bool, const bool) const;                                         \
                                                                                \
-    template std::map<size_t, std::shared_ptr<BP4Operation>>                   \
-    BP4Base::SetBP4Operations<T>(                                              \
+    template std::map<size_t, std::shared_ptr<BPOperation>>                    \
+    BP4Base::SetBPOperations<T>(                                               \
         const std::vector<core::VariableBase::Operation> &) const;
 
 ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)

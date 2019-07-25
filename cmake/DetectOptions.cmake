@@ -9,6 +9,16 @@
 # them, otherwise we disable it.  If explicitly ON then a failure to find
 # dependencies is an error,
 
+# Blosc
+if(ADIOS2_USE_Blosc STREQUAL AUTO)
+  find_package(Blosc)
+elseif(ADIOS2_USE_Blosc)
+  find_package(Blosc REQUIRED)
+endif()
+if(BLOSC_FOUND)
+  set(ADIOS2_HAVE_Blosc TRUE)
+endif()
+
 # BZip2
 if(ADIOS2_USE_BZip2 STREQUAL AUTO)
   find_package(BZip2)
@@ -47,6 +57,16 @@ elseif(ADIOS2_USE_MGARD)
 endif()
 if(MGARD_FOUND)
   set(ADIOS2_HAVE_MGARD TRUE)
+endif()
+
+# PNG
+if(ADIOS2_USE_PNG STREQUAL AUTO)
+  find_package(PNG 1.6.0)
+elseif(ADIOS2_USE_PNG)
+  find_package(PNG 1.6.0 REQUIRED)
+endif()
+if(PNG_FOUND)
+  set(ADIOS2_HAVE_PNG TRUE)
 endif()
 
 set(mpi_find_components C)
@@ -109,6 +129,16 @@ if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") AND NOT MSVC)
             set(ADIOS2_HAVE_SSC TRUE)
         endif()
     endif()
+endif()
+
+# DataSpaces
+if(ADIOS2_USE_DataSpaces STREQUAL AUTO)
+  find_package(DataSpaces 1.8)
+elseif(ADIOS2_USE_DataSpaces)
+  find_package(DataSpaces 1.8 REQUIRED)
+endif()
+if(DATASPACES_FOUND)
+  set(ADIOS2_HAVE_DataSpaces TRUE)
 endif()
 
 # HDF5

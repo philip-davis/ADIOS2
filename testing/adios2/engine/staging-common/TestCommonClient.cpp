@@ -28,6 +28,7 @@ int ExpectWriterFailure = 0;
 int WriterFailed = 0;
 int IgnoreTimeGap = 1;
 int IncreasingDelay = 0;
+int DelayWhileHoldingStep = 0;
 int FirstTimestepMustBeZero = 0;
 int NonBlockingBeginStep = 0;
 int Latest = 0;
@@ -100,6 +101,10 @@ TEST_F(SstReadTest, ADIOS2SstRead)
     // Create the Engine
     io.SetEngine(engine);
     io.SetParameters(engineParams);
+    if (Latest)
+    {
+        io.SetParameters({{"AlwaysProvideLatestTimestep", "true"}});
+    }
 
     adios2::Engine engine = io.Open(fname, adios2::Mode::Read);
 
@@ -117,13 +122,13 @@ TEST_F(SstReadTest, ADIOS2SstRead)
                                                          // something
         if (NonBlockingBeginStep)
         {
-            Status = engine.BeginStep(adios2::StepMode::NextAvailable, 0.0);
+            Status = engine.BeginStep(adios2::StepMode::Read, 0.0);
 
             while (Status == adios2::StepStatus::NotReady)
             {
                 BeginStepFailedPolls++;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                Status = engine.BeginStep(adios2::StepMode::NextAvailable, 0.0);
+                Status = engine.BeginStep(adios2::StepMode::Read, 0.0);
             }
         }
         else if (Latest)
@@ -135,8 +140,7 @@ TEST_F(SstReadTest, ADIOS2SstRead)
             }
             /* would like to do blocking, but API is inconvenient, so specify an
              * hour timeout */
-            Status =
-                engine.BeginStep(adios2::StepMode::LatestAvailable, 60 * 60.0);
+            Status = engine.BeginStep(adios2::StepMode::Read, 60 * 60.0);
         }
         else
         {
@@ -257,7 +261,7 @@ TEST_F(SstReadTest, ADIOS2SstRead)
 
         if (myStart + myLength > writerSize * Nx)
         {
-            myLength = (long unsigned int)writerSize * Nx - myStart;
+            myLength = (long unsigned int)writerSize * (int)Nx - myStart;
         }
         const adios2::Dims start{myStart};
         const adios2::Dims count{myLength};
@@ -287,16 +291,16 @@ TEST_F(SstReadTest, ADIOS2SstRead)
 
         var_time.SetSelection(sel_time);
 
-        in_I8.reserve(myLength);
-        in_I16.reserve(myLength);
-        in_I32.reserve(myLength);
-        in_I64.reserve(myLength);
-        in_R32.reserve(myLength);
-        in_R64.reserve(myLength);
-        in_C32.reserve(myLength);
-        in_C64.reserve(myLength);
-        in_R64_2d.reserve(myLength * 2);
-        in_R64_2d_rev.reserve(myLength * 2);
+        in_I8.resize(myLength);
+        in_I16.resize(myLength);
+        in_I32.resize(myLength);
+        in_I64.resize(myLength);
+        in_R32.resize(myLength);
+        in_R64.resize(myLength);
+        in_C32.resize(myLength);
+        in_C64.resize(myLength);
+        in_R64_2d.resize(myLength * 2);
+        in_R64_2d_rev.resize(myLength * 2);
 
         engine.Get(scalar_r64, in_scalar_R64);
 
@@ -313,6 +317,12 @@ TEST_F(SstReadTest, ADIOS2SstRead)
         engine.Get(var_r64_2d_rev, in_R64_2d_rev.data());
         std::time_t write_time;
         engine.Get(var_time, (int64_t *)&write_time);
+        if (IncreasingDelay && DelayWhileHoldingStep)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(
+                DelayMS)); /* sleep for DelayMS milliseconds */
+            DelayMS += 200;
+        }
         try
         {
             engine.EndStep();
@@ -335,7 +345,7 @@ TEST_F(SstReadTest, ADIOS2SstRead)
                 break;
             }
         }
-        if (IncreasingDelay)
+        if (IncreasingDelay && !DelayWhileHoldingStep)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(
                 DelayMS)); /* sleep for DelayMS milliseconds */
@@ -440,6 +450,10 @@ int main(int argc, char **argv)
         {
             IncreasingDelay = 1;
             Discard = 1;
+        }
+        else if (std::string(argv[1]) == "--delay_while_holding")
+        {
+            DelayWhileHoldingStep = 1;
         }
         else if (std::string(argv[1]) == "--precious_first")
         {
