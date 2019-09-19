@@ -2,8 +2,6 @@
 #include "config.h"
 #include <sys/types.h>
 
-#define USE_EPOLL
-
 #ifdef HAVE_WINDOWS_H
 #include <windows.h>
 #include <winsock.h>
@@ -63,10 +61,10 @@
 #define thr_thread_self() pthread_self()
 #define thr_thread_yield() sched_yield()
 
-#ifdef USE_EPOLL
+#ifdef HAVE_SYS_EPOLL_H
 #include <sys/epoll.h>
 #define MAX_EVENTS 32
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
 
 #ifndef SOCKET_ERROR
 #define SOCKET_ERROR -1
@@ -89,12 +87,12 @@ typedef struct _periodic_task *periodic_task_handle;
 
 typedef struct select_data {
     thr_thread_t server_thread;
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     void *fdset;		/* bitmap of the fds for read select */
     void *write_set;		/* bitmap of the fds for write select */
 #else
     int epfd;
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     int 	sel_item_max;
     FunctionListElement *select_items;
     FunctionListElement *write_items;
@@ -132,14 +130,14 @@ CManager cm;
 {
     select_data_ptr sd = malloc(sizeof(struct select_data));
     *sdp = sd;
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     sd->fdset = svc->malloc_func(sizeof(fd_set));
     FD_ZERO((fd_set *) sd->fdset);
     sd->write_set = svc->malloc_func(sizeof(fd_set));
     FD_ZERO((fd_set *) sd->write_set);
 #else
     sd->epfd = epoll_create(1);
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     sd->server_thread =  (thr_thread_t) NULL;
     sd->closed = 0;
     sd->sel_item_max = 0;
@@ -183,10 +181,10 @@ select_data_ptr *sdp;
     select_data_ptr sd = *sdp;
     *sdp = NULL;
     tasks = sd->periodic_task_list;
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     svc->free_func(sd->fdset);
     svc->free_func(sd->write_set);
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     svc->free_func(sd->select_items);
     svc->free_func(sd->write_items);
     while (tasks != NULL) {
@@ -256,13 +254,13 @@ int timeout_sec;
 int timeout_usec;
 {
     int i, res;
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     fd_set rd_set, wr_set;
 #else
     int fd;
     struct epoll_event events[MAX_EVENTS];
     int ep_timeout;
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     struct timeval timeout;
     int tmp_select_consistency_number = sd->select_consistency_number;
 
@@ -286,10 +284,10 @@ int timeout_usec;
 	fprintf(stderr, "          Server thread set to %lx.\n", (long) thr_thread_self());
 	sd->server_thread = thr_thread_self();
     }
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     rd_set = *(fd_set *) sd->fdset;
     wr_set = *(fd_set *) sd->write_set;
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     if ((timeout_sec >= 0) || (sd->periodic_task_list != NULL)) {
 	struct timeval now;
 #ifndef HAVE_WINDOWS_H
@@ -319,23 +317,23 @@ int timeout_usec;
 	    timeout.tv_sec = 0;
 	}
 	DROP_CM_LOCK(svc, sd->cm);
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
 	res = select(sd->sel_item_max+1, &rd_set, &wr_set,
                      (fd_set *) NULL, &timeout);
 #else
 	ep_timeout = (1000 * timeout.tv_sec) + (timeout.tv_usec / 1000);
     res = epoll_wait(sd->epfd, events, MAX_EVENTS, ep_timeout);
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
 	ACQUIRE_CM_LOCK(svc, sd->cm);
     } else {
 	svc->verbose(sd->cm, CMSelectVerbose, "CMSelect blocking select");
 	DROP_CM_LOCK(svc, sd->cm);
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     int max = sd->sel_item_max;
 	res = select(max+1, &rd_set, &wr_set, (fd_set *) NULL, NULL);
 #else
 	res = epoll_wait(sd->epfd, events, MAX_EVENTS, -1);
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
 	ACQUIRE_CM_LOCK(svc, sd->cm);
     }
     if (sd->closed) {
@@ -362,7 +360,7 @@ int timeout_usec;
 	    return;
 	}
 	if (errno == EBADF) {
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
 	    int j;
 	    int found_one = 0;
 	    for (j = 0; j < FD_SETSIZE; j++) {
@@ -393,7 +391,7 @@ int timeout_usec;
  * Warning.  Failed to localize.\n"); } */
 #else
 	    fprintf(stderr, "The epoll fd is invalid. This is catastrophic.\n");
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
 	} else if (errno != EAGAIN) {
 #ifdef HAVE_FDS_BITS
 	    fprintf(stderr, "select failed, errno %d, rd_set was %lx, %lx,%lx, %lx\n\n", errno,
@@ -459,7 +457,7 @@ int timeout_usec;
      * Careful!  We're reading the control list here without locking!
      * Something bad *might* happen, it's just unlikely.
      */
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     if (res != 0) {
 	for (i = 0; i <= sd->sel_item_max; i++) {
 	    if (sd->closed) {
@@ -527,7 +525,7 @@ int timeout_usec;
     	if (sd->select_consistency_number !=
     		tmp_select_consistency_number) return;
     }
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     if (sd->periodic_task_list != NULL) {
 	/* handle periodic tasks */
 	periodic_task_handle this_periodic_task = sd->periodic_task_list;
@@ -591,9 +589,9 @@ void *arg1;
 void *arg2;
 {
     select_data_ptr sd = *((select_data_ptr *)sdp);
-#ifdef USE_EPOLL
+#ifdef HAVE_SYS_EPOLL_H
     struct epoll_event ep_event;
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     if (sd->cm) {
 	/* assert CM is locked */
 	assert(CM_LOCKED(svc, sd->cm));
@@ -625,7 +623,7 @@ void *arg2;
 	}
 	sd->sel_item_max = fd;
     }
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     FD_SET(fd, (fd_set *) sd->fdset);
     if (fd > FD_SETSIZE) {
 	fprintf(stderr, "Internal Error, stupid WINSOCK large FD bug.\n");
@@ -663,9 +661,9 @@ void *arg1;
 void *arg2;
 {
     select_data_ptr sd = *((select_data_ptr *)sdp);
-#ifdef USE_EPOLL
+#ifdef HAVE_SYS_EPOLL_H
     struct epoll_event ep_event;
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     if (sd == NULL) {
 	init_select_data(svc, (select_data_ptr*)sdp, NULL);
 	sd = *((select_data_ptr *)sdp);
@@ -697,7 +695,7 @@ void *arg2;
 	}
 	sd->sel_item_max = fd;
     }
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     if (func != NULL) {
 	svc->verbose(sd->cm, CMSelectVerbose, "Adding fd %d to select write list", fd);
 	FD_SET(fd, (fd_set *) sd->write_set);
@@ -735,7 +733,7 @@ void *arg2;
     	    fprintf(stderr, "Something bad happened in %s. %d\n", __func__, errno);
     	}
     }
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     sd->write_items[fd].func = func;
     sd->write_items[fd].arg1 = arg1;
     sd->write_items[fd].arg2 = arg2;
@@ -911,15 +909,15 @@ select_data_ptr *sdp;
 int fd;
 {
     select_data_ptr sd = *((select_data_ptr *)sdp);
-#ifdef USE_EPOLL
+#ifdef HAVE_SYS_EPOLL_H
     struct epoll_event ep_event = {0}; // for a dumb kernel bug that we will never see
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     if (sd == NULL) {
 	init_select_data(svc, (select_data_ptr*)sdp, NULL);
 	sd = *((select_data_ptr *)sdp);
     }
     sd->select_consistency_number++;
-#ifndef USE_EPOLL
+#ifndef HAVE_SYS_EPOLL_H
     FD_CLR(fd, (fd_set *) sd->fdset);
 #else
     if(sd->write_items[fd].func) {
@@ -934,7 +932,7 @@ int fd;
     		fprintf(stderr, "Something bad happened in %s. %d\n", __func__, errno);
         }
     }
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
     sd->select_items[fd].func = NULL;
     sd->select_items[fd].arg1 = NULL;
     sd->select_items[fd].arg2 = NULL;
@@ -1227,9 +1225,9 @@ void *client_data;
     svc->verbose(sd->cm, CMSelectVerbose, "CMSelect Shutdown task called");
     if (sd->server_thread != thr_thread_self()) {
 	sd->closed = 1;
-#ifdef USE_EPOLL
+#ifdef HAVE_SYS_EPOLL_H
 	close(sd->epfd);
-#endif /* USE_EPOLL */
+#endif /* HAVE_SYS_EPOLL_H */
 	wake_server_thread(sd);
     }
 }
