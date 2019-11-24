@@ -13,6 +13,7 @@
 
 /// \cond EXCLUDE_FROM_DOXYGEN
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 /// \endcond
@@ -120,6 +121,8 @@ void SetParameterValue(const std::string key, const Params &parameters,
  */
 std::string DimsToString(const Dims &dimensions);
 
+Dims StringToDims(const std::string &dimensions);
+
 /**
  * Sets global name: prefix + separator + localName. If prefix is empty it
  * returns the localName as-is.
@@ -133,7 +136,7 @@ std::string GlobalName(const std::string &localName, const std::string &prefix,
                        const std::string separator) noexcept;
 
 /**
- * function that cast a string to a fixed width type verifying validity of the
+ * function that casts a string to a fixed width type verifying validity of the
  * cast with exceptions in debugMode. ONly int32_t, uint32_t, int64_t, uint64_t,
  * float, double are supported
  * @param input to be converted
@@ -144,6 +147,44 @@ std::string GlobalName(const std::string &localName, const std::string &prefix,
 template <class T>
 T StringTo(const std::string &input, const bool debugMode,
            const std::string &hint);
+
+/**
+ * function that casts a string to a size_t value safely. Calls uint32_t or
+ * uint64_t depending on sizeof(size_t)
+ * @param input to be converted
+ * @param debugMode check for string conversion
+ * @param hint passed for extra debugging info if exception is thrown
+ * @return cast input string to output value of type size_t
+ */
+size_t StringToSizeT(const std::string &input, const bool debugMode,
+                     const std::string &hint);
+
+/**
+ * Convert a string (e.g. 16Kb) to byte units. Last 2 characters must
+ * @param input
+ * @param debugMode
+ * @param hint
+ * @return
+ */
+size_t StringToByteUnits(const std::string &input, const bool debugMode,
+                         const std::string &hint);
+
+/**
+ * Transforms string to LowerCase
+ * @param input string
+ * @return input contents in lower case
+ */
+std::string LowerCase(const std::string &input);
+
+/**
+ * Extract inputs subset that matches a prefix input
+ * @param prefix input prefix
+ * @param inputs input names
+ * @return  all names with prefix "pre": pre1, pre2, ..., preXYZ,
+ */
+std::set<std::string>
+PrefixMatches(const std::string &prefix,
+              const std::set<std::string> &inputs) noexcept;
 
 } // end namespace helper
 } // end namespace adios2

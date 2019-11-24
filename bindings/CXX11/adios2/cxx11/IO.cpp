@@ -11,8 +11,11 @@
 #include "IO.h"
 #include "IO.tcc"
 
-#include "adios2/common/ADIOSMPI.h"
 #include "adios2/core/IO.h"
+
+#ifdef ADIOS2_HAVE_MPI
+#include "adios2/helper/adiosCommMPI.h"
+#endif
 
 namespace adios2
 {
@@ -109,7 +112,7 @@ Engine IO::Open(const std::string &name, const Mode mode, MPI_Comm comm)
 {
     helper::CheckForNullptr(m_IO,
                             "for engine " + name + ", in call to IO::Open");
-    return Engine(&m_IO->Open(name, mode, comm));
+    return Engine(&m_IO->Open(name, mode, helper::CommFromMPI(comm)));
 }
 #endif
 
@@ -134,10 +137,10 @@ std::map<std::string, Params> IO::AvailableVariables()
 
 std::map<std::string, Params>
 IO::AvailableAttributes(const std::string &variableName,
-                        const std::string separator)
+                        const std::string separator, const bool fullNameKeys)
 {
     helper::CheckForNullptr(m_IO, "in call to IO::AvailableAttributes");
-    return m_IO->GetAvailableAttributes(variableName, separator);
+    return m_IO->GetAvailableAttributes(variableName, separator, fullNameKeys);
 }
 
 std::string IO::VariableType(const std::string &name) const

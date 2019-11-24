@@ -16,6 +16,10 @@
 #include "adios2/common/ADIOSTypes.h"
 #include "adios2/core/Stream.h"
 
+#ifdef ADIOS2_HAVE_MPI
+#include <mpi.h>
+#endif
+
 namespace adios2
 {
 namespace py11
@@ -27,11 +31,13 @@ public:
     const std::string m_Name;
     const std::string m_Mode;
 
+#ifdef ADIOS2_HAVE_MPI
     File(const std::string &name, const std::string mode, MPI_Comm comm,
          const std::string engineType = "BPFile");
 
     File(const std::string &name, const std::string mode, MPI_Comm comm,
          const std::string &configFile, const std::string ioInConfigFile);
+#endif
 
     File(const std::string &name, const std::string mode,
          const std::string engineType = "BPFile");
@@ -123,7 +129,9 @@ private:
     adios2::Mode ToMode(const std::string mode) const;
 
     template <class T>
-    pybind11::array DoRead(core::Variable<T> &variable, const size_t blockID);
+    pybind11::array DoRead(const std::string &name, const Dims &start,
+                           const Dims &count, const size_t stepStart,
+                           const size_t stepCount, const size_t blockID);
 };
 
 } // end namespace py11

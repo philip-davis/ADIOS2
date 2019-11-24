@@ -6,23 +6,40 @@
 find_package(Threads REQUIRED)
 
 if(ADIOS2_HAVE_MPI)
-    set(extra_test_args EXEC_WRAPPER ${MPIEXEC_COMMAND})
+  set(extra_test_args EXEC_WRAPPER ${MPIEXEC_COMMAND})
 
-    add_executable(TestStagingMPMD  TestStagingMPMD.cpp)
-    target_link_libraries(TestStagingMPMD adios2 gtest ${CMAKE_THREAD_LIBS_INIT})
-    target_link_libraries(TestStagingMPMD adios2 gtest_interface MPI::MPI_C)
-    if(ADIOS2_HAVE_SST)
-        gtest_add_tests(TARGET TestStagingMPMD ${extra_test_args} 
-        		EXTRA_ARGS "SST" "MarshalMethod:FFS"
-			TEST_SUFFIX _SST_FFS)
-	gtest_add_tests(TARGET TestStagingMPMD ${extra_test_args} 
-        	        EXTRA_ARGS "SST" "MarshalMethod:BP"
-                	TEST_SUFFIX _SST_BP)
-    endif()
-
+  add_executable(TestStagingMPMD  TestStagingMPMD.cpp)
+  target_link_libraries(TestStagingMPMD
+    ${CMAKE_THREAD_LIBS_INIT}
+    adios2 gtest gtest_interface MPI::MPI_C
+  )
+  if(ADIOS2_HAVE_SST)
     gtest_add_tests(TARGET TestStagingMPMD ${extra_test_args} 
-                    EXTRA_ARGS "InSituMPI"
-                    TEST_SUFFIX _InSituMPI)
+      EXTRA_ARGS "SST" "MarshalMethod=FFS"
+      TEST_SUFFIX _SST_FFS
+      TEST_LIST _gtest_added_tests
+    )
+    set_tests_properties(${_gtest_added_tests} PROPERTIES
+      PROCESSORS ${NUM_TEST_PROCS}
+    )
+    gtest_add_tests(TARGET TestStagingMPMD ${extra_test_args} 
+      EXTRA_ARGS "SST" "MarshalMethod=BP"
+      TEST_SUFFIX _SST_BP
+      TEST_LIST _gtest_added_tests
+    )
+    set_tests_properties(${_gtest_added_tests} PROPERTIES
+      PROCESSORS ${NUM_TEST_PROCS}
+    )
+  endif()
+
+  gtest_add_tests(TARGET TestStagingMPMD ${extra_test_args} 
+    EXTRA_ARGS "InSituMPI"
+    TEST_SUFFIX _InSituMPI
+    TEST_LIST _gtest_added_tests
+  )
+  set_tests_properties(${_gtest_added_tests} PROPERTIES
+    PROCESSORS ${NUM_TEST_PROCS}
+  )
 endif()
 
 add_executable(TestCommonWrite TestCommonWrite.cpp)
@@ -96,14 +113,17 @@ if(ADIOS2_HAVE_MPI)
 endif()
 
 configure_file(
-  run_test.in
-  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/run_test.py
+  run_test.py.gen.in
+  ${CMAKE_CURRENT_BINARY_DIR}/run_test.py.gen
   @ONLY
 )
+file(GENERATE
+  OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/run_test.py.$<CONFIG>
+  INPUT ${CMAKE_CURRENT_BINARY_DIR}/run_test.py.gen)
 
 include (TestSupp.cmake )
 
-if (ADIOS2_HAVE_MPI AND NOT ("${MPIEXEC_EXECUTABLE}" STREQUAL "MPIEXEC_EXECUTABLE-NOTFOUND"))
+if(ADIOS2_HAVE_MPI AND MPIEXEC_EXECUTABLE)
    # we want to know if mpiexec is a shell script or a binary executable
    file(READ ${MPIEXEC_EXECUTABLE} MPIFILEDATA LIMIT 1024 HEX)
    string(LENGTH ${MPIFILEDATA} DATALENGTH)
@@ -121,22 +141,23 @@ if (ADIOS2_HAVE_MPI AND NOT ("${MPIEXEC_EXECUTABLE}" STREQUAL "MPIEXEC_EXECUTABL
    endforeach()
 endif()
 
-set (SIMPLE_TESTS "1x1;NoReaderNoWait;TimeoutOnOpen;Modes;1x1.Attrs;1x1.Local;1x1.SharedNothing;1x1.SharedIO;1x1.SharedVar;1x1.SharedNothingSync;1x1.SharedIOSync;1x1.SharedVarSync;2x1.SharedNothing;2x1.SharedIO;2x1.SharedVar;2x1.SharedNothingSync;2x1.SharedIOSync;2x1.SharedVarSync")
+set (SIMPLE_TESTS "1x1;NoReaderNoWait;TimeoutOnOpen;1x1.Modes;1x1.Attrs;1x1.Local;1x1.SharedNothing;1x1.SharedIO;1x1.SharedVar;1x1.SharedNothingSync;1x1.SharedIOSync;1x1.SharedVarSync;2x1.SharedNothing;2x1.SharedIO;2x1.SharedVar;2x1.SharedNothingSync;2x1.SharedIOSync;2x1.SharedVarSync")
 set (SIMPLE_FORTRAN_TESTS "")
 if(ADIOS2_HAVE_Fortran)
   set (SIMPLE_FORTRAN_TESTS "FtoC.1x1;CtoF.1x1;FtoF.1x1")
 endif()
 
-set (SPECIAL_TESTS "TimeoutReader;LatestReader;LatestReaderHold;DiscardWriter;PreciousTimestep;PreciousTimestepDiscard")
+set (SPECIAL_TESTS "TimeoutReader.1x1;LatestReader.1x1;LatestReaderHold.1x1;DiscardWriter.1x1;PreciousTimestep.3x2;PreciousTimestepDiscard.3x2;1x1.NoPreload;1x1.ForcePreload")
 if (MPIEXEC_IS_BINARY)
     # run_test.py can only kill readers/writers if mpiexec is not a shell script
-    list(APPEND SPECIAL_TESTS "KillReadersSerialized;KillReaders3Max;KillWriter_2x2;KillWriterTimeout_2x2")
+    list(APPEND SPECIAL_TESTS "KillReadersSerialized.3x2;KillReaders3Max.3x6;KillWriter_2x2;KillWriterTimeout_2x2")
 endif()
 
 set (SIMPLE_MPI_TESTS "")
 set (SIMPLE_MPI_FORTRAN_TESTS "")
 if (ADIOS2_HAVE_MPI)
-  set (SIMPLE_MPI_TESTS "2x1;1x2;3x5;5x3;DelayedReader_3x5;2x1.Local;1x2.Local;3x5.Local;5x3.Local;2x1ZeroDataVar;2x1ZeroDataR64")
+  set (SIMPLE_MPI_TESTS "2x1;1x2;3x5;5x3;DelayedReader_3x5;3x5LockGeometry;2x1.Local;1x2.Local;3x5.Local;5x3.Local;2x1ZeroDataVar;2x1ZeroDataR64")
+  list (APPEND SPECIAL_TESTS "2x1.NoPreload;2x3.ForcePreload")
   if (ADIOS_HAVE_Fortran)
     set (SIMPLE_MPI_FORTRAN_TESTS "FtoC.3x5;CtoF.3x5;FtoF.3x5")
   endif()
@@ -160,19 +181,14 @@ endif()
 
 
 #  For the moment, only test the default comm pattern (Peer)
-MutateTestSet( COMM_MIN_SST_TESTS "CommMin" writer "CPCommPattern:Min" "${BASIC_SST_TESTS}" )
-MutateTestSet( COMM_PEER_SST_TESTS "CommPeer" writer "CPCommPattern:Min" "${BASIC_SST_TESTS}" )
+MutateTestSet( COMM_MIN_SST_TESTS "CommMin" writer "CPCommPattern=Min" "${BASIC_SST_TESTS}" )
+MutateTestSet( COMM_PEER_SST_TESTS "CommPeer" writer "CPCommPattern=Peer" "${BASIC_SST_TESTS}" )
 
-MutateTestSet( FFS_SST_TESTS "FFS" writer "MarshalMethod:FFS" "${COMM_MIN_SST_TESTS};${COMM_PEER_SST_TESTS}" )
-MutateTestSet( BP_SST_TESTS "BP" writer "MarshalMethod:BP" "${COMM_MIN_SST_TESTS};${COMM_PEER_SST_TESTS}" )
+MutateTestSet( FFS_SST_TESTS "FFS" writer "MarshalMethod=FFS" "${COMM_MIN_SST_TESTS};${COMM_PEER_SST_TESTS}" )
+MutateTestSet( BP_SST_TESTS "BP" writer "MarshalMethod=BP" "${COMM_MIN_SST_TESTS};${COMM_PEER_SST_TESTS}" )
 
 set (SST_TESTS "")
 LIST (APPEND SST_TESTS ${FFS_SST_TESTS} ${BP_SST_TESTS})
-
-# remove Fto anything tests that use FFS because we can't spec it
-list(FILTER SST_TESTS EXCLUDE REGEX "Fto.*FFS.*")
-# remove Fto anything tests that use CommMin because we can't spec it
-list(FILTER SST_TESTS EXCLUDE REGEX "Fto.*CommMin.*")
 
 # Zero Data tests are unreliable with SST and BP marshaling
 list (FILTER SST_TESTS EXCLUDE REGEX "2x1ZeroData.*BP")
@@ -185,9 +201,10 @@ endforeach()
 #   Setup tests for InSituMPI engine
 #
 if(ADIOS2_HAVE_MPI)
-    set (INSITU_TESTS ${ALL_SIMPLE_TESTS})
+    set (SIMPLE_IMPI_TESTS "1x1;TimeoutOnOpen;1x1.Modes;1x1.Attrs;1x1.Local;1x1.SharedNothing;1x1.SharedIO;1x1.SharedVar;1x1.SharedNothingSync;1x1.SharedIOSync;1x1.SharedVarSync;2x1.SharedNothing;2x1.SharedIO;2x1.SharedVar;2x1.SharedNothingSync;2x1.SharedIOSync;2x1.SharedVarSync")
+    set (INSITU_TESTS ${SIMPLE_IMPI_TESTS} ${SIMPLE_FORTRAN_TESTS} ${SIMPLE_MPI_TESTS} ${SIMPLE_ZFP_TESTS})
     # Tests that don't work for InSitu
-    list (REMOVE_ITEM INSITU_TESTS "TimeoutOnOpen" "Modes" "1x1.Attrs")
+    list (REMOVE_ITEM INSITU_TESTS "TimeoutOnOpen" "1x1.Modes" "1x1.Attrs")
     # Local Vars don't work for InSitu
     list (FILTER INSITU_TESTS EXCLUDE REGEX ".*Local$")
     # Multiple streams don't work for InSitu
@@ -200,6 +217,8 @@ if(ADIOS2_HAVE_MPI)
     list (FILTER INSITU_TESTS EXCLUDE REGEX "DelayedReader.*")
     # Fortran scalar reads don't work for InSitu
     list (FILTER INSITU_TESTS EXCLUDE REGEX "(FtoF|CtoF).*")
+    # No locking geometry
+    list (FILTER INSITU_TESTS EXCLUDE REGEX "LockGeometry")
     foreach(test ${INSITU_TESTS})
         add_common_test(${test} InSituMPI)
     endforeach()
@@ -208,18 +227,23 @@ endif()
 #
 #   Setup tests for BP engines
 #
+
 if(NOT MSVC)    # not on windows
-    # Local Vars don't work for InSitu
     set (BP_TESTS ${ALL_SIMPLE_TESTS})
     # Delayed reader not worth testing on file engines
     list (FILTER BP_TESTS EXCLUDE REGEX "DelayedReader")
     # SharedVars fail with BP*
     list (FILTER BP_TESTS EXCLUDE REGEX ".*SharedVar$")
     foreach(test ${BP_TESTS})
-        add_common_test(${test} BP3)
         add_common_test(${test} BP4)
     endforeach()
+    # BP3 fails to handle lots of timesteps
+    list (FILTER BP_TESTS EXCLUDE REGEX "Bulk.*")
+    foreach(test ${BP_TESTS})
+        add_common_test(${test} BP3)
+    endforeach()
 endif()
+
 
 #
 #   Setup streaming tests for BP4 engine
@@ -227,17 +251,19 @@ endif()
 if(NOT MSVC)    # not on windows
     # BP4 streaming tests start with all the simple tests, but with a timeout added on open
     LIST (APPEND BP4_STREAM_TESTS ${ALL_SIMPLE_TESTS} ${SPECIAL_TESTS})
-    MutateTestSet( BP4_STREAM_TESTS "BPS" reader "OpenTimeoutSecs:10" "${BP4_STREAM_TESTS}")
+    MutateTestSet( BP4_STREAM_TESTS "BPS" reader "OpenTimeoutSecs=10" "${BP4_STREAM_TESTS}")
     # SharedVars fail with BP4_streaming*
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*SharedVar.BPS$")
     # Discard not a feature of BP4
-    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*DiscardWriter.BPS$")
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*DiscardWriter.1x1.*BPS$")
     # PreciousTimestep not a feature of BP4
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*Precious.*BPS$")
     # Timeout on Reader BeginStep failing in BP4
-    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*TimeoutReader.BPS$")
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*TimeoutReader.1x1.*BPS$")
     # LatestTimestep not a feature of BP4
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*LatestReader.*BPS$")
+    # Preload not a feature of BP4_streaming
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*Preload.*BPS$")
     # KillWriter fails with BP4
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*KillWriter.*BPS$")
     # SharedVars fail with BP4_streaming*
@@ -266,16 +292,3 @@ if(NOT MSVC AND ADIOS2_HAVE_HDF5)    # not on windows and only if we have HDF5
         add_common_test(${test} HDF5)
     endforeach()
 endif()
-
-
-#
-#   Setup tests for SSC engine
-#
-if(ADIOS2_HAVE_SSC AND ADIOS2_HAVE_MPI)
-    set(SSC_TESTS "NoReaderNoWait")
-    foreach(test ${SSC_TESTS})
-        add_common_test(${test} SSC)
-    endforeach()
-endif()
-
-

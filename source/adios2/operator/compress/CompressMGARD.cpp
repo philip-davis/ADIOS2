@@ -12,9 +12,7 @@
 
 #include <cstring> //std::memcpy
 
-extern "C" {
-#include <mgard_capi.h>
-}
+#include <mgard_api.h>
 
 #include "adios2/helper/adiosFunctions.h"
 
@@ -67,14 +65,14 @@ size_t CompressMGARD::Compress(const void *dataIn, const Dims &dimensions,
     r[1] = 0;
     r[2] = 0;
 
-    for (auto i = 0; i < ndims; i++)
+    for (size_t i = 0; i < ndims; i++)
     {
         r[ndims - i - 1] = static_cast<int>(dimensions[i]);
     }
 
     // Parameters
     bool hasTolerance = false;
-    double tolerance;
+    double tolerance, s = 0.0;
     auto itAccuracy = parameters.find("accuracy");
     if (itAccuracy != parameters.end())
     {
@@ -93,11 +91,16 @@ size_t CompressMGARD::Compress(const void *dataIn, const Dims &dimensions,
                                     "tolerance for MGARD compression "
                                     "operator\n");
     }
+    auto itSParameter = parameters.find("s");
+    if (itSParameter != parameters.end())
+    {
+        s = std::stod(itSParameter->second);
+    }
 
     int sizeOut = 0;
-    unsigned char *dataOutPtr =
-        mgard_compress(mgardType, const_cast<void *>(dataIn), &sizeOut, r[0],
-                       r[1], r[2], &tolerance, 0);
+    unsigned char *dataOutPtr = mgard_compress(
+        mgardType, const_cast<double *>(static_cast<const double *>(dataIn)),
+        sizeOut, r[0], r[1], r[2], tolerance, s);
 
     const size_t sizeOutT = static_cast<size_t>(sizeOut);
     std::memcpy(bufferOut, dataOutPtr, sizeOutT);
@@ -112,6 +115,7 @@ size_t CompressMGARD::Decompress(const void *bufferIn, const size_t sizeIn,
 {
     int mgardType = -1;
     size_t elementSize = 0;
+    double quantizer = 0.0;
 
     if (type == helper::GetType<double>())
     {
@@ -134,13 +138,13 @@ size_t CompressMGARD::Decompress(const void *bufferIn, const size_t sizeIn,
     r[1] = 0;
     r[2] = 0;
 
-    for (auto i = 0; i < ndims; i++)
+    for (size_t i = 0; i < ndims; i++)
     {
         r[ndims - i - 1] = static_cast<int>(dimensions[i]);
     }
 
     void *dataPtr = mgard_decompress(
-        mgardType,
+        mgardType, quantizer,
         reinterpret_cast<unsigned char *>(const_cast<void *>(bufferIn)),
         static_cast<int>(sizeIn), r[0], r[1], r[2], 0);
 

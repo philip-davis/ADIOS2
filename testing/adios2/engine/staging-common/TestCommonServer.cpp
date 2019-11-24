@@ -18,17 +18,15 @@
 
 #include <gtest/gtest.h>
 
-#include "ParseArgs.h"
 #include "TestData.h"
+
+#include "ParseArgs.h"
 
 class CommonServerTest : public ::testing::Test
 {
 public:
     CommonServerTest() = default;
 };
-
-static int MyCloseNow = 0;
-static int GlobalCloseNow = 0;
 
 inline bool file_exists(const std::string &name)
 {
@@ -40,8 +38,7 @@ inline bool file_exists(const std::string &name)
 TEST_F(CommonServerTest, ADIOS2CommonServer)
 {
     int mpiRank = 0, mpiSize = 1;
-
-    // Number of steps
+    int GlobalCloseNow = 0;
 
     std::remove(shutdown_name.c_str());
 #ifdef ADIOS2_HAVE_MPI
@@ -151,30 +148,40 @@ TEST_F(CommonServerTest, ADIOS2CommonServer)
         engine.Put(var_r64, data_R64.data(), sync);
         engine.Put(var_c32, data_C32.data(), sync);
         engine.Put(var_c64, data_C64.data(), sync);
-        engine.Put(var_r64_2d, &data_R64_2d[0][0], sync);
-        engine.Put(var_r64_2d_rev, &data_R64_2d_rev[0][0], sync);
+        engine.Put(var_r64_2d, &data_R64_2d[0], sync);
+        engine.Put(var_r64_2d_rev, &data_R64_2d_rev[0], sync);
         // Advance to the next time step
         std::time_t localtime = std::time(NULL);
         engine.Put(var_time, (int64_t *)&localtime);
+        if (LockGeometry)
+        {
+            // we'll never change our data decomposition
+            engine.LockWriterDefinitions();
+        }
         engine.EndStep();
         std::this_thread::sleep_for(std::chrono::milliseconds(
             DelayMS)); /* sleep for DelayMS milliseconds */
         step++;
+        {
+            int MyCloseNow = 0;
+            if (file_exists(shutdown_name))
+            {
+                MyCloseNow = 1;
+            }
 #ifdef ADIOS2_HAVE_MPI
-        MPI_Allreduce(&MyCloseNow, &GlobalCloseNow, 1, MPI_INT, MPI_LOR,
-                      MPI_COMM_WORLD);
-        if (file_exists(shutdown_name))
-        {
-            MyCloseNow = GlobalCloseNow = 1;
-        }
+            MPI_Allreduce(&MyCloseNow, &GlobalCloseNow, 1, MPI_INT, MPI_LOR,
+                          MPI_COMM_WORLD);
 #else
-        GlobalCloseNow = MyCloseNow;
-        if (file_exists(shutdown_name))
-        {
-            MyCloseNow = GlobalCloseNow = 1;
-        }
+            GlobalCloseNow = MyCloseNow;
 #endif
+        }
+        if (GlobalCloseNow)
+        {
+            std::cout << "Writer closing stream because file \""
+                      << shutdown_name << "\" was noticed" << std::endl;
+        }
     }
+    std::cout << "Writer closing stream normally" << std::endl;
     // Close the file
     engine.Close();
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.2)
-project(EVPath VERSION 4.4.0 LANGUAGES C CXX)
+project(EVPath VERSION 4.5.0 LANGUAGES C CXX)
 
 # Enable <PackageName>_ROOT variables for dependency searching
 # CMake v3.12
@@ -207,6 +207,11 @@ if(NOT HAVE_CLOCK_GETTIME)
   endif()
 endif()
 
+CHECK_INCLUDE_FILE(sys/epoll.h HAVE_SYS_EPOLL_H)
+set(CM_DEFAULT_SELECT "select")
+if (HAVE_SYS_EPOLL_H)
+   set(CM_DEFAULT_SELECT "epoll")
+endif()
 set(CM_DEFAULT_TRANSPORT "sockets")
 set(EVPATH_TRANSPORT_TARGETS)
 if(EVPATH_TRANSPORT_MODULES)
@@ -228,12 +233,23 @@ if(EVPATH_TRANSPORT_MODULES)
   target_link_libraries(cmmulticast evpath atl::atl)
 
   list(APPEND EVPATH_TRANSPORT_TARGETS cmselect cmsockets cmudp cmmulticast)
+
+  if (HAVE_SYS_EPOLL_H)
+     add_library(cmepoll MODULE cmepoll.c)
+     set_target_properties(cmepoll PROPERTIES
+     	  OUTPUT_NAME ${EVPATH_LIBRARY_PREFIX}cmepoll)
+     target_link_libraries(cmepoll evpath atl::atl)
+     list(APPEND EVPATH_TRANSPORT_TARGETS cmepoll)
+  endif()
 else()
   # dummy dyn linking in cm.c and cm_transport.c
   set(NO_DYNAMIC_LINKING 1)
 
   target_sources(EVPath PRIVATE cmsockets.c)
   target_sources(EVPath PRIVATE cmselect.c)
+  if (HAVE_SYS_EPOLL_H)
+    target_sources(EVPath PRIVATE cmepoll.c)
+  endif()
   target_sources(EVPath PRIVATE cmudp.c)
   target_sources(EVPath PRIVATE cmmulticast.c)
 endif()
@@ -269,6 +285,26 @@ if(ENET_FOUND)
   endif()
 else()
   message(STATUS " - Enet library was not found.  This is not a fatal error, just that the Enet transport will not be built.")
+endif()
+
+if(NOT (DEFINED EVPATH_USE_ZPL_ENET))
+  option(EVPATH_USE_ZPL_ENET "Build the enet transport" "ON")
+endif()
+if(EVPATH_USE_ZPL_ENET)
+  set(RUN_ZPL_ENET_TESTS TRUE)
+  set(ZPL_ENET_AVAILABLE TRUE)
+  CONFIGURE_FILE(cmenet.c cmzplenet.c COPYONLY)
+  SET_SOURCE_FILES_PROPERTIES(cmzplenet.c PROPERTIES COMPILE_FLAGS "-DUSE_ZPL_ENET=1 -DENET_API=static")
+  if(EVPATH_TRANSPORT_MODULES)
+    add_library(cmzplenet MODULE cmzplenet.c ip_config.c)
+    set_target_properties(cmzplenet PROPERTIES
+      OUTPUT_NAME ${EVPATH_LIBRARY_PREFIX}cmzplenet)
+
+    target_link_libraries(cmzplenet evpath)
+    list(APPEND EVPATH_TRANSPORT_TARGETS cmzplenet)
+  else()
+    target_sources(EVPath PRIVATE cmzplenet.c)
+  endif()
 endif()
 
 # udt4 transport
@@ -570,7 +606,11 @@ install(TARGETS EVPath ${EVPATH_TRANSPORT_TARGETS} EXPORT EVPathTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
-set(EVPATH_LIBRARY_BUILD_DIR ${PROJECT_BINARY_DIR}/lib)
+FOREACH(tgt ${EVPATH_TRANSPORT_TARGETS})
+   TARGET_COMPILE_DEFINITIONS(${tgt} PRIVATE EVPATH_LIBRARY_BUILD_DIR="$<TARGET_FILE_DIR:${tgt}>")
+ENDFOREACH()
+
+TARGET_COMPILE_DEFINITIONS(EVPath PRIVATE EVPATH_LIBRARY_BUILD_DIR="$<TARGET_FILE_DIR:EVPath>")
 set(EVPATH_LIBRARY_INSTALL_DIR ${CMAKE_INSTALL_PREFIX}/lib)
 
 if(CMAKE_C_COMPILER_ID MATCHES "Intel") 
@@ -671,6 +711,7 @@ if(NOT EVPATH_QUIET)
   message(STATUS "BUILD_SHARED_LIBS = ${BUILD_SHARED_LIBS}  (options are: ON, OFF, default OFF)")
   message(STATUS "EVPATH_USE_NVML = ${EVPATH_USE_NVML}")
   message(STATUS "EVPATH_USE_ENET = ${EVPATH_USE_ENET}")
+  message(STATUS "EVPATH_USE_ZPL_ENET = ${EVPATH_USE_ZPL_ENET}")
   message(STATUS "EVPATH_USE_UDT4 = ${EVPATH_USE_UDT4}")
   message(STATUS "EVPATH_USE_LIBFABRIC = ${EVPATH_USE_LIBFABRIC}")
   message(STATUS "EVPATH_USE_IBVERBS = ${EVPATH_USE_IBVERBS}")

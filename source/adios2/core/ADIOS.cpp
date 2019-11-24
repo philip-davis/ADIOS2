@@ -13,8 +13,8 @@
 #include <algorithm> // std::transform
 #include <ios>       //std::ios_base::failure
 
-#include "adios2/common/ADIOSMPI.h"
 #include "adios2/core/IO.h"
+#include "adios2/helper/adiosCommDummy.h"
 #include "adios2/helper/adiosFunctions.h" //InquireKey, BroadcastFile
 
 // OPERATORS
@@ -57,50 +57,43 @@ namespace adios2
 namespace core
 {
 
-ADIOS::ADIOS(const std::string configFile, MPI_Comm mpiComm,
+ADIOS::ADIOS(const std::string configFile, helper::Comm comm,
              const bool debugMode, const std::string hostLanguage)
-: m_ConfigFile(configFile), m_DebugMode(debugMode), m_HostLanguage(hostLanguage)
+: m_ConfigFile(configFile), m_DebugMode(debugMode),
+  m_HostLanguage(hostLanguage), m_Comm(std::move(comm))
 {
-    SMPI_Comm_dup(mpiComm, &m_MPIComm);
-
     if (!configFile.empty())
     {
-        if (configFile.substr(configFile.size() - 3) == "xml")
+        if (helper::EndsWith(configFile, ".xml"))
         {
             XMLInit(configFile);
         }
-        // TODO expand for other formats
+        else if (helper::EndsWith(configFile, ".yaml") ||
+                 helper::EndsWith(configFile, ".yml"))
+        {
+            YAMLInit(configFile);
+        }
     }
 }
 
 ADIOS::ADIOS(const std::string configFile, const bool debugMode,
              const std::string hostLanguage)
-: ADIOS(configFile, MPI_COMM_NULL, debugMode, hostLanguage)
+: ADIOS(configFile, helper::CommDummy(), debugMode, hostLanguage)
 {
 }
 
-ADIOS::ADIOS(MPI_Comm mpiComm, const bool debugMode,
+ADIOS::ADIOS(helper::Comm comm, const bool debugMode,
              const std::string hostLanguage)
-: ADIOS("", mpiComm, debugMode, hostLanguage)
+: ADIOS("", std::move(comm), debugMode, hostLanguage)
 {
 }
 
 ADIOS::ADIOS(const bool debugMode, const std::string hostLanguage)
-: ADIOS("", MPI_COMM_NULL, debugMode, hostLanguage)
+: ADIOS("", helper::CommDummy(), debugMode, hostLanguage)
 {
 }
 
-ADIOS::~ADIOS()
-{
-    // Handle the case where MPI is finalized before the ADIOS destructor is
-    // called, which happens, e.g., with global / static ADIOS objects
-    int flag;
-    MPI_Finalized(&flag);
-    if (!flag)
-    {
-        SMPI_Comm_free(&m_MPIComm);
-    }
-}
+ADIOS::~ADIOS() = default;
 
 IO &ADIOS::DeclareIO(const std::string name)
 {
@@ -121,14 +114,15 @@ IO &ADIOS::DeclareIO(const std::string name)
             {
                 throw std::invalid_argument(
                     "ERROR: IO with name " + name +
-                    " previously declared with DeclareIO, name must be unique,"
+                    " previously declared with DeclareIO, name must be "
+                    "unique,"
                     " in call to DeclareIO\n");
             }
         }
     }
 
     auto ioPair = m_IOs.emplace(
-        name, IO(*this, name, m_MPIComm, false, m_HostLanguage, m_DebugMode));
+        name, IO(*this, name, false, m_HostLanguage, m_DebugMode));
     IO &io = ioPair.first->second;
     io.SetDeclared();
     return io;
@@ -165,15 +159,19 @@ void ADIOS::FlushAll()
     }
 }
 
-Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
+Operator &ADIOS::DefineOperator(const std::string &name, const std::string type,
                                 const Params &parameters)
 {
+    auto lf_ErrorMessage = [](const std::string type) -> std::string {
+        return "ERROR: this version of ADIOS2 didn't compile with the " + type +
+               " library, when parsing config file in ADIOS constructor or in "
+               "call to ADIOS::DefineOperator";
+    };
+
     std::shared_ptr<Operator> operatorPtr;
 
     CheckOperator(name);
-    std::string typeLowerCase(type);
-    std::transform(typeLowerCase.begin(), typeLowerCase.end(),
-                   typeLowerCase.begin(), ::tolower);
+    const std::string typeLowerCase = helper::LowerCase(type);
 
     if (typeLowerCase == "bzip2")
     {
@@ -183,9 +181,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressBZIP2>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "bzip2 library, in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("BZip2"));
 #endif
     }
     else if (typeLowerCase == "zfp")
@@ -196,9 +192,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressZFP>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "zfp library (minimum v1.5), in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("ZFP"));
 #endif
     }
     else if (typeLowerCase == "sz")
@@ -209,9 +203,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressSZ>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "SZ library (minimum v2.0.2.0), in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("SZ"));
 #endif
     }
     else if (typeLowerCase == "mgard")
@@ -222,9 +214,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressMGARD>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "MGARD library (minimum v0.0.0.1), in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("MGARD"));
 #endif
     }
     else if (typeLowerCase == "png")
@@ -235,9 +225,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressPNG>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "PNG library (minimum v1.6), in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("PNG"));
 #endif
     }
     else if (typeLowerCase == "blosc")
@@ -248,9 +236,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
             std::make_shared<compress::CompressBlosc>(parameters, m_DebugMode));
         operatorPtr = itPair.first->second;
 #else
-        throw std::invalid_argument(
-            "ERROR: this version of ADIOS2 didn't compile with the "
-            "Blosc library, in call to DefineOperator\n");
+        throw std::invalid_argument(lf_ErrorMessage("Blosc"));
 #endif
     }
     else
@@ -273,7 +259,7 @@ Operator &ADIOS::DefineOperator(const std::string name, const std::string type,
     return *operatorPtr.get();
 }
 
-Operator *ADIOS::InquireOperator(const std::string name) noexcept
+Operator *ADIOS::InquireOperator(const std::string &name) noexcept
 {
     std::shared_ptr<Operator> *op = helper::InquireKey(name, m_Operators);
     if (op == nullptr)
@@ -351,6 +337,11 @@ void ADIOS::CheckOperator(const std::string name) const
 void ADIOS::XMLInit(const std::string &configFileXML)
 {
     helper::ParseConfigXML(*this, configFileXML, m_IOs, m_Operators);
+}
+
+void ADIOS::YAMLInit(const std::string &configFileYAML)
+{
+    helper::ParseConfigYAML(*this, configFileYAML, m_IOs, m_Operators);
 }
 
 } // end namespace core

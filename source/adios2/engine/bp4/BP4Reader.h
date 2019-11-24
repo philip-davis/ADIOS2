@@ -13,8 +13,11 @@
 
 #include "adios2/common/ADIOSConfig.h"
 #include "adios2/core/Engine.h"
-#include "adios2/toolkit/format/bp4/BP4.h" //format::BP4Deserializer
+#include "adios2/helper/adiosComm.h"
+#include "adios2/toolkit/format/bp/bp4/BP4Deserializer.h"
 #include "adios2/toolkit/transportman/TransportMan.h"
+
+#include <chrono>
 
 namespace adios2
 {
@@ -32,10 +35,10 @@ public:
      * @param io
      * @param name
      * @param openMode only read
-     * @param mpiComm
+     * @param comm
      */
     BP4Reader(IO &io, const std::string &name, const Mode mode,
-              MPI_Comm mpiComm);
+              helper::Comm comm);
 
     virtual ~BP4Reader() = default;
 
@@ -49,6 +52,12 @@ public:
     void PerformGets() final;
 
 private:
+    typedef std::chrono::duration<double> Seconds;
+    typedef std::chrono::time_point<
+        std::chrono::steady_clock,
+        std::chrono::duration<double, std::chrono::steady_clock::period>>
+        TimePoint;
+
     format::BP4Deserializer m_BP4Deserializer;
     /* transport manager for metadata file */
     transportman::TransportMan m_MDFileManager;
@@ -67,14 +76,21 @@ private:
 
     void Init();
     void InitTransports();
-    void InitBuffer();
-    void OpenFiles();
+
+    /** Open files within timeout.
+     * @return True if files are opened, False in case of timeout
+     */
+    void OpenFiles(const TimePoint &timeoutInstant, const Seconds &pollSeconds,
+                   const Seconds &timeoutSeconds);
+    void InitBuffer(const TimePoint &timeoutInstant, const Seconds &pollSeconds,
+                    const Seconds &timeoutSeconds);
 
     /** Read in more metadata if exist (throwing away old).
      *  For streaming only.
      *  @return size of new content from Index Table
      */
-    size_t UpdateBuffer();
+    size_t UpdateBuffer(const TimePoint &timeoutInstant,
+                        const Seconds &pollSeconds);
 
     /** Process the new metadata coming in (in UpdateBuffer)
      *  @param newIdxSize: the size of the new content from Index Table
@@ -92,7 +108,7 @@ private:
      *  Used by BeginStep() to get new steps from file when it reaches the
      *  end of steps in memory.
      */
-    StepStatus CheckForNewSteps(float timeoutSeconds);
+    StepStatus CheckForNewSteps(Seconds timeoutSeconds);
 
 #define declare_type(T)                                                        \
     void DoGetSync(Variable<T> &, T *) final;                                  \

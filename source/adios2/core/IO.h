@@ -53,15 +53,32 @@ public:
     /** unique identifier */
     const std::string m_Name;
 
-    /** from ADIOS class passed to Engine created with Open
-     *  if no new communicator is passed */
-    MPI_Comm m_MPIComm;
-
     /** true: extra exceptions checks */
     const bool m_DebugMode = false;
 
     /** from ADIOS class passed to Engine created with Open */
     const std::string m_HostLanguage = "C++";
+
+    /**
+     * Map holding variable identifiers
+     * <pre>
+     * key: unique variable name,
+     * value: pair.first = type as string GetType<T> from adiosTemplates.h
+     *        pair.second = index in fixed size map (e.g. m_Int8, m_Double)
+     * </pre>
+     */
+    DataMap m_Variables;
+
+    /**
+     * Map holding attribute identifiers
+     * <pre>
+     * key: unique attribute name,
+     * value: pair.first = type as string GetType<T> from
+     *                     helper/adiosTemplates.h
+     *        pair.second = index in fixed size map (e.g. m_Int8, m_Double)
+     * </pre>
+     */
+    DataMap m_Attributes;
 
     /** From SetParameter, parameters for a particular engine from m_Type */
     Params m_Parameters;
@@ -81,7 +98,7 @@ public:
     std::vector<Operation> m_Operations;
 
     /** BP3 engine default if unknown */
-    std::string m_EngineType = "BP3";
+    std::string m_EngineType = "File";
 
     /** at read for file engines: true: in streaming (step-by-step) mode, or
      * false: random-access mode (files) */
@@ -94,19 +111,21 @@ public:
      * DefineVariable in code */
     std::map<std::string, std::vector<Operation>> m_VarOpsPlaceholder;
 
+    /** true: prefix variables/attributes are cached per variable
+     *   when function m_IsPrefixedNames called */
+    bool m_IsPrefixedNames = false;
+
     /**
      * @brief Constructor called from ADIOS factory class DeclareIO function.
      * Not to be used direclty in applications.
      * @param adios reference to ADIOS object that owns current IO
      * @param name unique identifier for this IO object
-     * @param mpiComm MPI communicator from ADIOS factory class
      * @param inConfigFile IO defined in config file (XML)
      * @param hostLanguage current language using the adios2 library
      * @param debugMode true: extra exception checks (recommended)
      */
-    IO(ADIOS &adios, const std::string name, MPI_Comm mpiComm,
-       const bool inConfigFile, const std::string hostLanguage,
-       const bool debugMode);
+    IO(ADIOS &adios, const std::string name, const bool inConfigFile,
+       const std::string hostLanguage, const bool debugMode);
 
     ~IO() = default;
 
@@ -277,6 +296,15 @@ public:
     std::string InquireVariableType(const std::string &name) const noexcept;
 
     /**
+     * Overload that accepts a const iterator into the m_Variables map if found
+     * @param itVariable
+     * @return type primitive type
+     */
+    std::string
+    InquireVariableType(const DataMap::const_iterator itVariable) const
+        noexcept;
+
+    /**
      * Retrieves hash holding internal variable identifiers
      * @return
      * <pre>
@@ -326,7 +354,8 @@ public:
      */
     std::map<std::string, Params>
     GetAvailableAttributes(const std::string &variableName = std::string(),
-                           const std::string separator = "/") noexcept;
+                           const std::string separator = "/",
+                           const bool fullNamesKeys = false) noexcept;
 
     /**
      * @brief Check existence in config file passed to ADIOS class constructor
@@ -366,7 +395,7 @@ public:
      * @exception std::invalid_argument if Engine with unique name is already
      * created with another Open, in debug mode only
      */
-    Engine &Open(const std::string &name, const Mode mode, MPI_Comm mpiComm);
+    Engine &Open(const std::string &name, const Mode mode, helper::Comm comm);
 
     /**
      * Overloaded version that reuses the MPI_Comm object passed
@@ -412,6 +441,16 @@ public:
     void ResetVariablesStepSelection(const bool zeroStart = false,
                                      const std::string hint = "");
 
+    void SetPrefixedNames(const bool isStep) noexcept;
+
+    /** Gets the internal reference to a variable map for type T */
+    template <class T>
+    std::map<unsigned int, Variable<T>> &GetVariableMap() noexcept;
+
+    /** Gets the internal reference to an attribute map for type T */
+    template <class T>
+    std::map<unsigned int, Attribute<T>> &GetAttributeMap() noexcept;
+
 private:
     /** true: exist in config file (XML) */
     const bool m_InConfigFile = false;
@@ -421,46 +460,16 @@ private:
     /** Independent (default) or Collective */
     adios2::IOMode m_IOMode = adios2::IOMode::Independent;
 
-    // Variables
-    /**
-     * Map holding variable identifiers
-     * <pre>
-     * key: unique variable name,
-     * value: pair.first = type as string GetType<T> from adiosTemplates.h
-     *        pair.second = index in fixed size map (e.g. m_Int8, m_Double)
-     * </pre>
-     */
-    DataMap m_Variables;
-
 /** Variable containers based on fixed-size type */
 #define declare_map(T, NAME) std::map<unsigned int, Variable<T>> m_##NAME;
     ADIOS2_FOREACH_STDTYPE_2ARGS(declare_map)
 #undef declare_map
 
-    std::map<unsigned int, VariableCompound> m_Compound;
-
-    /** Gets the internal reference to a variable map for type T
-     *  This function is specialized in IO.tcc */
-    template <class T>
-    std::map<unsigned int, Variable<T>> &GetVariableMap() noexcept;
-
-    /**
-     * Map holding attribute identifiers
-     * <pre>
-     * key: unique attribute name,
-     * value: pair.first = type as string GetType<T> from
-     *                     helper/adiosTemplates.h
-     *        pair.second = index in fixed size map (e.g. m_Int8, m_Double)
-     * </pre>
-     */
-    DataMap m_Attributes;
-
 #define declare_map(T, NAME) std::map<unsigned int, Attribute<T>> m_##NAME##A;
     ADIOS2_FOREACH_ATTRIBUTE_STDTYPE_2ARGS(declare_map)
 #undef declare_map
 
-    template <class T>
-    std::map<unsigned int, Attribute<T>> &GetAttributeMap() noexcept;
+    std::map<unsigned int, VariableCompound> m_Compound;
 
     std::map<std::string, std::shared_ptr<Engine>> m_Engines;
 

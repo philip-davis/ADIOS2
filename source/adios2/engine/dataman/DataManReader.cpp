@@ -6,14 +6,9 @@
  *
  *  Created on: Feb 21, 2017
  *      Author: Jason Wang
- *              William F Godoy
  */
 
-#include "DataManReader.h"
 #include "DataManReader.tcc"
-
-#include "adios2/common/ADIOSMacros.h"
-#include "adios2/helper/adiosFunctions.h" //CSVToVector
 
 namespace adios2
 {
@@ -23,20 +18,81 @@ namespace engine
 {
 
 DataManReader::DataManReader(IO &io, const std::string &name, const Mode mode,
-                             MPI_Comm mpiComm)
-: DataManCommon("DataManReader", io, name, mode, mpiComm),
-  m_DataManSerializer(m_IsRowMajor, m_ContiguousMajor, m_IsLittleEndian,
-                      mpiComm)
+                             helper::Comm comm)
+: DataManCommon("DataManReader", io, name, mode, std::move(comm))
 {
-    m_EndMessage = " in call to IO Open DataManReader " + m_Name + "\n";
-    Init();
+    GetParameter(m_IO.m_Parameters, "AlwaysProvideLatestTimestep",
+                 m_ProvideLatest);
+
+    m_ZmqRequester.OpenRequester(m_Timeout, m_ReceiverBufferSize);
+
+    if (m_OneToOneMode)
+    {
+        m_ControlAddresses.push_back("tcp://" + m_IPAddress + ":" +
+                                     std::to_string(m_Port));
+        m_DataAddresses.push_back("tcp://" + m_IPAddress + ":" +
+                                  std::to_string(m_Port + m_MpiSize));
+    }
+    else
+    {
+        if (m_IPAddress.empty())
+        {
+            throw(std::invalid_argument(
+                "IP address not specified in wide area staging"));
+        }
+        std::string address =
+            "tcp://" + m_IPAddress + ":" + std::to_string(m_Port);
+        std::string request = "Address";
+        auto reply =
+            m_ZmqRequester.Request(request.data(), request.size(), address);
+        auto start_time = std::chrono::system_clock::now();
+        while (reply == nullptr or reply->empty())
+        {
+            reply =
+                m_ZmqRequester.Request(request.data(), request.size(), address);
+            auto now_time = std::chrono::system_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                now_time - start_time);
+            if (duration.count() > m_Timeout)
+            {
+                m_InitFailed = true;
+                return;
+            }
+        }
+        auto addJson = nlohmann::json::parse(*reply);
+        m_DataAddresses =
+            addJson["DataAddresses"].get<std::vector<std::string>>();
+        m_ControlAddresses =
+            addJson["ControlAddresses"].get<std::vector<std::string>>();
+        m_TotalWriters = m_DataAddresses.size();
+    }
+
+    for (const auto &address : m_DataAddresses)
+    {
+        auto dataZmq = std::make_shared<adios2::zmq::ZmqPubSub>();
+        dataZmq->OpenSubscriber(address, m_Timeout, m_ReceiverBufferSize);
+        m_ZmqSubscriberVec.push_back(dataZmq);
+    }
+    m_SubscriberThread = std::thread(&DataManReader::SubscriberThread, this);
+
+    if (m_Verbosity >= 5)
+    {
+        std::cout << "DataManReader::DataManReader() Rank " << m_MpiRank
+                  << std::endl;
+    }
 }
 
 DataManReader::~DataManReader()
 {
-    if (m_IsClosed == false)
+    if (not m_IsClosed)
     {
         DoClose();
+    }
+
+    if (m_Verbosity >= 5)
+    {
+        std::cout << "DataManReader::~DataManReader() Rank " << m_MpiRank
+                  << ", Step " << m_CurrentStep << std::endl;
     }
 }
 
@@ -45,78 +101,65 @@ StepStatus DataManReader::BeginStep(StepMode stepMode,
 {
     if (m_Verbosity >= 5)
     {
-        std::cout << "DataManReader::BeginStep() begin. Last step "
-                  << m_CurrentStep << std::endl;
+        std::cout << "DataManReader::BeginStep() begin, Rank " << m_MpiRank
+                  << ", Step " << m_CurrentStep << std::endl;
     }
 
-    if (m_CurrentStep == m_FinalStep && m_CurrentStep > 0)
+    float timeout = timeoutSeconds;
+
+    if (timeout <= 0)
     {
+        timeout = m_Timeout;
+    }
+
+    if (m_InitFailed)
+    {
+        if (m_Verbosity >= 5)
+        {
+            std::cout << "DataManReader::BeginStep(), Rank " << m_MpiRank
+                      << " returned EndOfStream due "
+                         "to initialization failure"
+                      << std::endl;
+        }
         return StepStatus::EndOfStream;
     }
 
-    format::DmvVecPtr vars = nullptr;
-    auto start_time = std::chrono::system_clock::now();
-
-    while (vars == nullptr)
+    if (m_CurrentStep >= m_FinalStep and m_CurrentStep >= 0)
     {
-        auto now_time = std::chrono::system_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-            now_time - start_time);
-        // timeout == std::numeric_limits<float>::max() means there is no
-        // timeout, and it should block
-        // forever until it receives something.
-        if (timeoutSeconds >= 0.0)
+        if (m_Verbosity >= 5)
         {
-            if (duration.count() > timeoutSeconds)
-            {
-                return StepStatus::NotReady;
-            }
+            std::cout << "DataManReader::BeginStep() Rank " << m_MpiRank
+                      << " returned EndOfStream, "
+                         "final step is "
+                      << m_FinalStep << std::endl;
         }
-
-        m_MetaDataMap = m_DataManSerializer.GetMetaData();
-
-        if (!m_ProvideLatest)
-        {
-            size_t minStep = std::numeric_limits<size_t>::max();
-            ;
-            for (const auto &i : m_MetaDataMap)
-            {
-                if (minStep > i.first)
-                {
-                    minStep = i.first;
-                }
-            }
-            m_CurrentStep = minStep;
-        }
-        else
-        {
-            size_t maxStep = 0;
-            for (const auto &i : m_MetaDataMap)
-            {
-                if (maxStep < i.first)
-                {
-                    maxStep = i.first;
-                }
-            }
-            m_CurrentStep = maxStep;
-        }
-
-        auto currentStepIt = m_MetaDataMap.find(m_CurrentStep);
-        if (currentStepIt != m_MetaDataMap.end())
-        {
-            vars = currentStepIt->second;
-        }
+        return StepStatus::EndOfStream;
     }
 
-    m_DataManSerializer.GetAttributes(m_IO);
+    m_CurrentStepMetadata = m_FastSerializer.GetEarliestLatestStep(
+        m_CurrentStep, m_TotalWriters, timeout, m_ProvideLatest);
 
-    for (const auto &i : *vars)
+    if (m_CurrentStepMetadata == nullptr)
+    {
+        if (m_Verbosity >= 5)
+        {
+            std::cout << "DataManReader::BeginStep() Rank " << m_MpiRank
+                      << "returned EndOfStream due "
+                         "to timeout"
+                      << std::endl;
+        }
+        return StepStatus::EndOfStream;
+    }
+
+    m_FastSerializer.GetAttributes(m_IO);
+
+    for (const auto &i : *m_CurrentStepMetadata)
     {
         if (i.step == m_CurrentStep)
         {
-            if (i.type == "compound")
+            if (i.type.empty())
             {
-                throw("Compound type is not supported yet.");
+                throw("unknown data type");
             }
 #define declare_type(T)                                                        \
     else if (i.type == helper::GetType<T>())                                   \
@@ -125,18 +168,14 @@ StepStatus DataManReader::BeginStep(StepMode stepMode,
     }
             ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
-            else
-            {
-                throw("Unknown type caught in "
-                      "DataManReader::BeginStepSubscribe.");
-            }
+            else { throw("unknown data type"); }
         }
     }
 
     if (m_Verbosity >= 5)
     {
-        std::cout << "DataManReader::BeginStep() end. Current step "
-                  << m_CurrentStep << std::endl;
+        std::cout << "DataManReader::BeginStep() end, Rank " << m_MpiRank
+                  << ", Step " << m_CurrentStep << std::endl;
     }
 
     return StepStatus::OK;
@@ -148,17 +187,12 @@ void DataManReader::PerformGets() {}
 
 void DataManReader::EndStep()
 {
-
+    m_FastSerializer.Erase(m_CurrentStep, true);
+    m_CurrentStepMetadata = nullptr;
     if (m_Verbosity >= 5)
     {
-        std::cout << "DataManReader::EndStep() start. Current step "
-                  << m_CurrentStep << std::endl;
-    }
-    m_DataManSerializer.Erase(m_CurrentStep);
-    if (m_Verbosity >= 5)
-    {
-        std::cout << "DataManReader::EndStep() end. Current step "
-                  << m_CurrentStep << std::endl;
+        std::cout << "DataManReader::EndStep() Current step " << m_CurrentStep
+                  << std::endl;
     }
 }
 
@@ -166,36 +200,28 @@ void DataManReader::Flush(const int transportIndex) {}
 
 // PRIVATE
 
-void DataManReader::Init()
+void DataManReader::SubscriberThread()
 {
-    if (m_WorkflowMode == "file")
+    while (m_ThreadActive)
     {
-        m_FileTransport.Open(m_Name, Mode::Read);
-        return;
-    }
-
-    // initialize transports
-    m_WANMan = std::make_shared<transportman::WANMan>(m_MPIComm, m_DebugMode);
-    m_WANMan->OpenTransports(m_IO.m_TransportsParameters, Mode::Read,
-                             m_WorkflowMode, true);
-
-    // start threads
-    m_Listening = true;
-    m_DataThread =
-        std::make_shared<std::thread>(&DataManReader::IOThread, this, m_WANMan);
-}
-
-void DataManReader::IOThread(std::shared_ptr<transportman::WANMan> man)
-{
-    while (m_Listening)
-    {
-        std::shared_ptr<std::vector<char>> buffer = man->Read(0);
-        if (buffer != nullptr)
+        for (auto &z : m_ZmqSubscriberVec)
         {
-            int ret = m_DataManSerializer.PutPack(buffer);
-            if (ret > 0)
+            auto buffer = z->PopBufferQueue();
+            if (buffer != nullptr && buffer->size() > 0)
             {
-                m_FinalStep = ret;
+                if (buffer->size() < 64)
+                {
+                    try
+                    {
+                        auto jmsg = nlohmann::json::parse(buffer->data());
+                        m_FinalStep = jmsg["FinalStep"].get<size_t>();
+                        continue;
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+                m_FastSerializer.PutPack(buffer);
             }
         }
     }
@@ -225,18 +251,16 @@ ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 
 void DataManReader::DoClose(const int transportIndex)
 {
-    if (transportIndex == -1)
+    m_ThreadActive = false;
+    if (m_SubscriberThread.joinable())
     {
-        m_Listening = false;
-        if (m_DataThread != nullptr)
-        {
-            if (m_DataThread->joinable())
-            {
-                m_DataThread->join();
-            }
-        }
+        m_SubscriberThread.join();
     }
-    m_WANMan = nullptr;
+    if (m_Verbosity >= 5)
+    {
+        std::cout << "DataManReader::DoClose() Rank " << m_MpiRank << ", Step "
+                  << m_CurrentStep << std::endl;
+    }
 }
 
 } // end namespace engine

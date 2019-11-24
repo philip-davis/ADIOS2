@@ -9,6 +9,9 @@
 /* Define to 1 if you have the enet header and libraries */
 #cmakedefine ENET_FOUND
 
+/* Define to 1 to if ZPL ENET transport was built */
+#cmakedefine ZPL_ENET_AVAILABLE
+
 /* Define to 1 if you have the udt4 header and libraries */
 #cmakedefine UDT4_FOUND
 
@@ -20,9 +23,6 @@
 
 /* Define to 1 if you have the df_shm header and libraries */
 #cmakedefine DF_SHM_FOUND
-
-/* Place where evpath transport libraries are built */
-#cmakedefine EVPATH_LIBRARY_BUILD_DIR "@EVPATH_LIBRARY_BUILD_DIR@"
 
 /* Place where evpath transport libraries are installed */
 #cmakedefine EVPATH_LIBRARY_INSTALL_DIR "@EVPATH_LIBRARY_INSTALL_DIR@"
@@ -89,6 +89,9 @@
 
 /* Define to 1 if you have the `sysinfo' function. */
 #cmakedefine HAVE_SYSINFO
+
+/* Define to 1 if you have the <sys/epoll.h> header file. */
+#cmakedefine HAVE_SYS_EPOLL_H
 
 /* Define to 1 if you have the <sys/select.h> header file. */
 #cmakedefine HAVE_SYS_SELECT_H

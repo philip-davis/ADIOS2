@@ -16,7 +16,7 @@ This is ADIOS 2 : The Adaptable Input/Output (I/O) System, ADIOS 2 is developed 
 
 ADIOS 2 is a framework designed for scientific data I/O to publish and subscribe (put/get) data when and where required. 
 
-ADIOS 2 transports data as groups of self-describing variables and attributes across different media types (such as files, wide-area-networks, and remote direct memory access) using a common application programming interface for all transport modes. ADIOS 2 can be used on supercomputers, commercial clouds, and personal computers.
+ADIOS 2 transports data as groups of self-describing variables and attributes across different media types (such as files, wide-area-networks, and remote direct memory access) using a common application programming interface for all transport modes. ADIOS 2 can be used on supercomputers, cloud systems, and personal computers.
 
 ADIOS 2 focuses on:
 
@@ -28,11 +28,11 @@ ADIOS 2 focuses on:
     
 In addition, ADIOS 2 APIs are based on:
 
-* **MPI** ADIOS 2 is MPI-based, it can be used in non-MPI serial code.
+* **MPI** ADIOS 2 is MPI-based, it can be used in non-MPI serial code. Non-MPI 100% serial build is optional.
 
 * **Data Groups** ADIOS 2 favors a deferred/prefetch/grouped variables transport mode by default to maximize data-per-request ratios. Sync mode, one variable at a time, is treated as the special case.
 
-* **Data Steps** ADIOS 2 follow the actual production/consumption of data using an “steps” abstraction removing the need to manage extra indexing information.
+* **Data Steps** ADIOS 2 follows the actual production/consumption of data using an I/O “steps” abstraction removing the need to manage extra indexing information.
 
 * **Data Engines** ADIOS 2 Engine abstraction allows for reusing the APIs for different transport modes removing the need for drastic code changes.
 
@@ -42,20 +42,29 @@ Please find [The ADIOS 2 User Guide at readthedocs](https://adios2.readthedocs.i
 
 ## Getting ADIOS2
 
-* From source: [Install ADIOS 2](https://adios2.readthedocs.io/en/latest/setting_up/setting_up.html#) requires CMake v3.6 or above
+* From source: [Install ADIOS 2 documentation](https://adios2.readthedocs.io/en/latest/setting_up/setting_up.html#) requires CMake v3.6 or above. For a cmake configuration example see [scripts/runconf/runconf.sh](https://github.com/ornladios/ADIOS2/blob/master/scripts/runconf/runconf.sh)
 
 
-* Conda packages: [https://anaconda.org/williamfgc](https://anaconda.org/williamfgc)
+* Conda packages: 
+    * [https://anaconda.org/williamfgc](https://anaconda.org/williamfgc)
+    * [https://anaconda.org/conda-forge/adios2](https://anaconda.org/conda-forge/adios2)
 
 
-  Once ADIOS 2 is installed refer to: 
+* Spack: [adios2 package](https://spack.readthedocs.io/en/latest/package_list.html#adios2)
+
+
+* Docker images: 
+    * Ubuntu 18.04: under [scripts/docker/images/ubuntu18.04/Dockerfile](https://github.com/ornladios/ADIOS2/tree/master/scripts/docker/images/ubuntu18.04/Dockerfile)
+
+
+Once ADIOS 2 is installed refer to: 
 
 * [Linking ADIOS 2](https://adios2.readthedocs.io/en/latest/setting_up/setting_up.html#linking-adios-2)
 
 
 ## Releases
 
-* Latest release: [v2.4.0](https://github.com/ornladios/ADIOS2/releases/tag/v2.4.0)
+* Latest release: [v2.5.0](https://github.com/ornladios/ADIOS2/releases/tag/v2.5.0)
 
 * Previous releases: [https://github.com/ornladios/ADIOS2/releases](https://github.com/ornladios/ADIOS2/releases)
 
@@ -66,7 +75,6 @@ If you found a bug, please open an [issue on ADIOS2 github repository](https://g
 ## Contributing
 
 We invite the community to contribute, see [Contributor's Guide to ADIOS 2](Contributing.md) for instructions on how to contribute. ADIOS 2 will always be free and open-source.
-
 
 ## License
 ADIOS >= 2.0 is licensed under the Apache License v2.0.  See the accompanying

@@ -8,16 +8,22 @@
  *      Author: Greg Eisenhauer
  */
 
-#include "adios2/helper/adiosFunctions.h"
-#include "adios2/toolkit/format/bp3/BP3.h"
+#include "SstReader.h"
+#include "SstParamParser.h"
+#include "SstReader.tcc"
+
 #include <cstring>
 #include <string>
 
-#include "SstReader.h"
-#include "SstReader.tcc"
-
-#include "SstParamParser.h"
+#include "adios2/helper/adiosComm.h"
+#include "adios2/helper/adiosFunctions.h"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
+
+#ifdef ADIOS2_HAVE_MPI
+#include "adios2/helper/adiosCommMPI.h"
+#else
+#include "adios2/toolkit/sst/mpiwrap.h"
+#endif
 
 namespace adios2
 {
@@ -27,15 +33,21 @@ namespace engine
 {
 
 SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
-                     MPI_Comm mpiComm)
-: Engine("SstReader", io, name, mode, mpiComm)
+                     helper::Comm comm)
+: Engine("SstReader", io, name, mode, std::move(comm))
 {
     char *cstr = new char[name.length() + 1];
     std::strcpy(cstr, name.c_str());
 
     Init();
 
-    m_Input = SstReaderOpen(cstr, &Params, mpiComm);
+    m_Input = SstReaderOpen(cstr, &Params,
+#ifdef ADIOS2_HAVE_MPI
+                            CommAsMPI(m_Comm)
+#else
+                            MPI_COMM_NULL
+#endif
+    );
     if (!m_Input)
     {
         throw std::runtime_error(
@@ -167,8 +179,65 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
         return (void *)NULL;
     };
 
+    auto arrayBlocksInfoCallback =
+        [](void *reader, void *variable, const char *type, int WriterRank,
+           int DimCount, size_t *Shape, size_t *Start, size_t *Count) {
+            std::vector<size_t> VecShape;
+            std::vector<size_t> VecStart;
+            std::vector<size_t> VecCount;
+            std::string Type(type);
+            class SstReader::SstReader *Reader =
+                reinterpret_cast<class SstReader::SstReader *>(reader);
+            size_t currentStep = SstCurrentStep(Reader->m_Input);
+            /*
+             * setup shape of array variable as global (I.E. Count == Shape,
+             * Start == 0)
+             */
+            if (Shape)
+            {
+                for (int i = 0; i < DimCount; i++)
+                {
+                    VecShape.push_back(Shape[i]);
+                    VecStart.push_back(Start[i]);
+                    VecCount.push_back(Count[i]);
+                }
+            }
+            else
+            {
+                VecShape = {};
+                VecStart = {};
+                for (int i = 0; i < DimCount; i++)
+                {
+                    VecCount.push_back(Count[i]);
+                }
+            }
+
+            if (Type == "compound")
+            {
+                return;
+            }
+#define declare_type(T)                                                        \
+    else if (Type == helper::GetType<T>())                                     \
+    {                                                                          \
+        Variable<T> *Var = reinterpret_cast<class Variable<T> *>(variable);    \
+        auto savedShape = Var->m_Shape;                                        \
+        auto savedCount = Var->m_Count;                                        \
+        auto savedStart = Var->m_Start;                                        \
+        Var->m_Shape = VecShape;                                               \
+        Var->m_Count = VecCount;                                               \
+        Var->m_Start = VecStart;                                               \
+        Var->SetBlockInfo((T *)NULL, currentStep);                             \
+        Var->m_Shape = savedShape;                                             \
+        Var->m_Count = savedCount;                                             \
+        Var->m_Start = savedStart;                                             \
+    }
+            ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+            return;
+        };
+
     SstReaderInitFFSCallback(m_Input, this, varFFSCallback, arrayFFSCallback,
-                             attrFFSCallback);
+                             attrFFSCallback, arrayBlocksInfoCallback);
 
     delete[] cstr;
 }
@@ -254,8 +323,9 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
         //   whatever transport it is using.  But it is opaque to the Engine
         //   (and to the control plane).)
 
-        m_BP3Deserializer = new format::BP3Deserializer(m_MPIComm, m_DebugMode);
-        m_BP3Deserializer->InitParameters(m_IO.m_Parameters);
+        m_BP3Deserializer = new format::BP3Deserializer(m_Comm, m_DebugMode);
+        m_BP3Deserializer->Init(m_IO.m_Parameters,
+                                "in call to BP3::Open for reading");
 
         m_BP3Deserializer->m_Metadata.Resize(
             (*m_CurrentStepMetaData->WriterMetadata)->DataSize,
@@ -525,12 +595,11 @@ void SstReader::DoClose(const int transportIndex) { SstReaderClose(m_Input); }
     {                                                                          \
         if (m_WriterMarshalMethod == SstMarshalFFS)                            \
         {                                                                      \
-            throw std::invalid_argument("ERROR: SST Engine doesn't implement " \
-                                        "function DoAllStepsBlocksInfo\n");    \
+            return variable.m_BlocksInfo;                                      \
         }                                                                      \
         else if (m_WriterMarshalMethod == SstMarshalBP)                        \
         {                                                                      \
-            return m_BP3Deserializer->BlocksInfo(variable, step);              \
+            return m_BP3Deserializer->BlocksInfo(variable, 0);                 \
         }                                                                      \
         throw std::invalid_argument(                                           \
             "ERROR: Unknown marshal mechanism in DoBlocksInfo\n");             \

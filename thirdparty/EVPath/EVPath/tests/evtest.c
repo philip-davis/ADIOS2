@@ -150,6 +150,7 @@ static atom_t CM_MCAST_ADDR;
 static atom_t CM_MCAST_PORT;
 
 char *transport = NULL;
+char *control = NULL;
 
 #include "support.c"
 
@@ -170,7 +171,7 @@ main(int argc, char **argv)
     if (regression && regression_master) {
 	return do_regression_master_test();
     }
-    cm = CManager_create();
+    cm = CManager_create_control(control);
     (void) CMfork_comm_thread(cm);
 
     if (argc == 1) {
@@ -195,7 +196,7 @@ main(int argc, char **argv)
 	    char *actual_transport = NULL;
 	    get_string_attr(contact_list, CM_TRANSPORT, &actual_transport);
 	    if (!actual_transport || (strncmp(actual_transport, transport, strlen(actual_transport)) != 0)) {
-		printf("Failed to load transport \"%s\"\n", transport);
+		printf("Failed to load transport \"%s\", got %s\n", transport, actual_transport);
 		exit(1);
 	    }
 	}
@@ -293,7 +294,7 @@ do_regression_master_test()
     sigaction(SIGALRM, &sigact, NULL);
     alarm(300);
 #endif
-    cm = CManager_create();
+    cm = CManager_create_control(control);
     forked = CMfork_comm_thread(cm);
     if ( transport || ((transport = getenv("CMTransport")) != NULL)) {
 	listen_list = create_attr_list();
@@ -312,7 +313,7 @@ do_regression_master_test()
       char *actual_transport = NULL;
       get_string_attr(contact_list, CM_TRANSPORT, &actual_transport);
 	    if (!actual_transport || (strncmp(actual_transport, transport, strlen(actual_transport)) != 0)) {
-	printf("Failed to load transport \"%s\"\n", transport);
+                printf("Failed to load transport \"%s\", got %s\n", transport, actual_transport);
 	exit(1);
       }
     }

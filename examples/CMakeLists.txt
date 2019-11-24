@@ -5,12 +5,11 @@
 
 add_subdirectory(basics)
 add_subdirectory(hello)
+add_subdirectory(query)
 add_subdirectory(useCases)
 
 if(ADIOS2_HAVE_MPI)
-  #if(MPIEXEC_MAX_NUMPROCS GREATER 3)
-    add_subdirectory(heatTransfer)
-  #endif()
+  add_subdirectory(heatTransfer)
 endif()
 
 if(ADIOS2_BUILD_EXAMPLES_EXPERIMENTAL)

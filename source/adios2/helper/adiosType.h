@@ -161,7 +161,7 @@ std::vector<size_t> Uint64ArrayToSizetVector(const size_t nElements,
  * @return TimeUnit enum (int) TimeUnit::s, TimeUnit::ms, etc.
  */
 TimeUnit StringToTimeUnit(const std::string timeUnitString,
-                          const bool debugMode);
+                          const bool debugMode, const std::string hint = "");
 
 /**
  * Returns the conversion factor from input units Tb, Gb, Mb, Kb, to bytes as a
@@ -219,6 +219,24 @@ std::string ValueToString(const T value) noexcept;
  */
 template <class T>
 void CheckForNullptr(T *pointer, const std::string hint);
+
+/**
+ * Converts an unordered map key to a sorted set
+ * @param hash input hash
+ * @return ordered keys
+ */
+template <class T, class U>
+std::set<T> KeysToSet(const std::unordered_map<T, U> &hash) noexcept;
+
+/**
+ * Calls map.erase(key) returning current value. Throws an exception if Key not
+ * found.
+ * @param key input
+ * @param map input/output
+ * @return value from found key
+ */
+template <class T, class U>
+U EraseKey(const T &key, std::map<T, U> &map);
 
 } // end namespace helper
 } // end namespace adios2

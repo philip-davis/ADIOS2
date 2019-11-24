@@ -13,7 +13,6 @@
 
 #include "SstReader.h"
 
-#include "adios2/common/ADIOSMPI.h"
 #include "adios2/helper/adiosFunctions.h" //GetType<T>
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
 
@@ -124,7 +123,11 @@ void SstReader::ReadVariableBlocks(Variable<T> &variable)
     // wait for all SstRead requests to finish
     for (const auto &i : sstReadHandlers)
     {
-        SstWaitForCompletion(m_Input, i);
+        if (SstWaitForCompletion(m_Input, i) != SstSuccess)
+        {
+            throw std::runtime_error(
+                "ERROR:  Writer failed before returning data");
+        }
     }
 
     size_t iter = 0;

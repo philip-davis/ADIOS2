@@ -11,16 +11,11 @@
 #ifndef ADIOS2_ENGINE_SSCREADER_H_
 #define ADIOS2_ENGINE_SSCREADER_H_
 
-#include <queue>
-
-#include "adios2/common/ADIOSConfig.h"
-#include "adios2/core/ADIOS.h"
+#include "SscHelper.h"
 #include "adios2/core/Engine.h"
-#include "adios2/helper/adiosFunctions.h"
-#include "adios2/toolkit/format/dataman/DataManSerializer.h"
-#include "adios2/toolkit/format/dataman/DataManSerializer.tcc"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
-#include "adios2/toolkit/transportman/stagingman/StagingMan.h"
+#include <mpi.h>
+#include <queue>
 
 namespace adios2
 {
@@ -33,52 +28,37 @@ class SscReader : public Engine
 {
 public:
     SscReader(IO &adios, const std::string &name, const Mode mode,
-              MPI_Comm mpiComm);
-
-    ~SscReader();
+              helper::Comm comm);
+    virtual ~SscReader();
     StepStatus BeginStep(
         StepMode stepMode = StepMode::Read,
         const float timeoutSeconds = std::numeric_limits<float>::max()) final;
-    StepStatus BeginStepIterator(StepMode stepMode, format::DmvVecPtr &vars);
     void PerformGets() final;
     size_t CurrentStep() const final;
     void EndStep() final;
 
 private:
-    bool m_Tolerance = false;
-    format::DataManSerializer m_DataManSerializer;
-    std::shared_ptr<transportman::StagingMan> m_DataTransport;
-    std::shared_ptr<transportman::StagingMan> m_MetadataTransport;
-    format::DmvVecPtrMap m_MetaDataMap;
-    int64_t m_CurrentStep = -1;
-    int m_MpiRank;
-    std::vector<std::string> m_FullAddresses;
-    int m_Timeout = 3;
-    int m_RetryMax = 128;
-    size_t m_AppID;
-    bool m_ConnectionLost = false;
+    size_t m_CurrentStep = 0;
+    bool m_InitialStep = true;
 
-    struct Request
-    {
-        std::string variable;
-        std::string type;
-        size_t step;
-        Dims start;
-        Dims count;
-        void *data;
-    };
-    std::vector<Request> m_DeferredRequests;
+    ssc::VarMapVec m_GlobalWritePatternMap;
+    ssc::VarMap m_LocalReadPatternMap;
 
-    format::VecPtr m_RepliedMetadata;
-    std::mutex m_RepliedMetadataMutex;
+    ssc::PosMap m_AllReceivingWriterRanks;
+    std::vector<char> m_Buffer;
+    MPI_Win m_MpiWin;
 
-    void RequestMetadata(const int64_t step = -5);
+    int m_WorldRank;
+    int m_WorldSize;
+    int m_ReaderRank;
+    int m_ReaderSize;
+    int m_WriterSize;
+    int m_WriterMasterWorldRank;
+    int m_ReaderMasterWorldRank;
 
-    void Init() final;
-    void InitParameters() final;
-    void InitTransports() final;
-    template <typename T>
-    void CheckIOVariable(const std::string &name, const Dims &shape);
+    void SyncMpiPattern();
+    void SyncWritePattern();
+    void SyncReadPattern();
 
 #define declare_type(T)                                                        \
     void DoGetSync(Variable<T> &, T *) final;                                  \
@@ -98,10 +78,6 @@ private:
     std::vector<typename Variable<T>::Info>
     BlocksInfoCommon(const Variable<T> &variable, const size_t step) const;
 
-    template <typename T>
-    void AccumulateMinMax(T &min, T &max, const std::vector<char> &minVec,
-                          const std::vector<char> &maxVec) const;
-
     void DoClose(const int transportIndex = -1);
 
     template <class T>
@@ -109,9 +85,6 @@ private:
 
     template <class T>
     void GetDeferredCommon(Variable<T> &variable, T *data);
-
-    void Log(const int level, const std::string &message, const bool mpi,
-             const bool endline);
 
     int m_Verbosity = 0;
 };

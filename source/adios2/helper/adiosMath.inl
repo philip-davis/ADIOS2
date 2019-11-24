@@ -217,7 +217,7 @@ void GetMinMaxComplex(const std::complex<T> *values, const size_t size,
     T minNorm = std::norm(values[0]);
     T maxNorm = minNorm;
 
-    for (auto i = 1; i < size; ++i)
+    for (size_t i = 1; i < size; ++i)
     {
         T norm = std::norm(values[i]);
 
@@ -349,25 +349,36 @@ void GetMinMaxThreads(const std::complex<T> *values, const size_t size,
 
 template <class T>
 void GetMinMaxSubblocks(const T *values, const Dims &count,
-                        const BlockDivisionInfo info, std::vector<T> &MinMaxs,
+                        const BlockDivisionInfo &info, std::vector<T> &MinMaxs,
                         T &bmin, T &bmax, const unsigned int threads) noexcept
 {
     const int ndim = static_cast<int>(count.size());
     const size_t nElems = helper::GetTotalSize(count);
-    if (info.nBlocks <= 1)
+    if (info.NBlocks <= 1)
     {
-        GetMinMaxThreads(values, nElems, bmin, bmax, threads);
         MinMaxs.resize(2);
+        // account for span
+        if (values == nullptr)
+        {
+            return;
+        }
+        GetMinMaxThreads(values, nElems, bmin, bmax, threads);
         MinMaxs[0] = bmin;
         MinMaxs[1] = bmax;
     }
     else
     {
-        // Calculate min/max for each block separately
-        MinMaxs.resize(2 * info.nBlocks);
-        for (int b = 0; b < info.nBlocks; ++b)
+        MinMaxs.resize(2 * info.NBlocks);
+        // account for span
+        if (values == nullptr)
         {
-            Box<Dims> box = GetSubBlock(count, info, b);
+            return;
+        }
+
+        // Calculate min/max for each block separately
+        for (int b = 0; b < info.NBlocks; ++b)
+        {
+            const Box<Dims> box = GetSubBlock(count, info, b);
             // calculate start position of this subblock in values array
             size_t pos = 0;
             size_t prod = 1;

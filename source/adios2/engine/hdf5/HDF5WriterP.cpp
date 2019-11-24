@@ -10,7 +10,6 @@
 
 #include "HDF5WriterP.h"
 
-#include "adios2/common/ADIOSMPI.h"
 #include "adios2/helper/adiosFunctions.h" //CSVToVector
 
 namespace adios2
@@ -21,8 +20,9 @@ namespace engine
 {
 
 HDF5WriterP::HDF5WriterP(IO &io, const std::string &name, const Mode mode,
-                         MPI_Comm mpiComm)
-: Engine("HDF5Writer", io, name, mode, mpiComm), m_H5File(io.m_DebugMode)
+                         helper::Comm comm)
+: Engine("HDF5Writer", io, name, mode, std::move(comm)),
+  m_H5File(io.m_DebugMode)
 {
     m_IO.m_ReadStreaming = false;
     m_EndMessage = ", in call to IO HDF5Writer Open " + m_Name + "\n";
@@ -57,7 +57,7 @@ void HDF5WriterP::Init()
     }
 
 #ifdef NEVER
-    m_H5File.Init(m_Name, m_MPIComm, true);
+    m_H5File.Init(m_Name, m_Comm, true);
 #else
     // enforce .h5 ending
     std::string suffix = ".h5";
@@ -70,11 +70,11 @@ void HDF5WriterP::Init()
     {
         // is a file with .bp ending
         std::string updatedName = m_Name.substr(0, wpos) + suffix;
-        m_H5File.Init(updatedName, m_MPIComm, true);
+        m_H5File.Init(updatedName, m_Comm, true);
     }
     else
     {
-        m_H5File.Init(m_Name, m_MPIComm, true);
+        m_H5File.Init(m_Name, m_Comm, true);
     }
     m_H5File.ParseParameters(m_IO);
 #endif

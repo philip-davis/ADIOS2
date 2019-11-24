@@ -11,12 +11,12 @@
 #ifndef ADIOS2_ENGINE_SST_SSTREADER_H_
 #define ADIOS2_ENGINE_SST_SSTREADER_H_
 
-#include <adios2/common/ADIOSMPI.h>
-
 #include "adios2/toolkit/sst/sst.h"
 
 #include "adios2/core/Engine.h"
 #include "adios2/core/IO.h"
+#include "adios2/helper/adiosComm.h"
+#include "adios2/toolkit/format/bp/bp3/BP3Deserializer.h"
 
 namespace adios2
 {
@@ -34,13 +34,13 @@ public:
      * @param adios
      * @param name
      * @param accessMode
-     * @param mpiComm
+     * @param comm
      * @param method
      * @param debugMode
      * @param nthreads
      */
     SstReader(IO &io, const std::string &name, const Mode mode,
-              MPI_Comm mpiComm);
+              helper::Comm comm);
 
     virtual ~SstReader();
 

@@ -13,8 +13,9 @@
 
 #include <gtest/gtest.h>
 
-#include "ParseArgs.h"
 #include "TestData.h"
+
+#include "ParseArgs.h"
 
 class CommonWriteTest : public ::testing::Test
 {
@@ -31,9 +32,6 @@ TEST_F(CommonWriteTest, ADIOS2CommonWrite)
 {
     // form a mpiSize * Nx 1D array
     int mpiRank = 0, mpiSize = 1;
-
-    // Number of steps
-    const std::size_t NSteps = 10;
 
 #ifdef ADIOS2_HAVE_MPI
     MPI_Comm_rank(testComm, &mpiRank);
@@ -170,9 +168,8 @@ TEST_F(CommonWriteTest, ADIOS2CommonWrite)
         {
             engine.Put(var_c32, data_C32.data(), adios2::Mode::Sync);
             engine.Put(var_c64, data_C64.data(), adios2::Mode::Deferred);
-            engine.Put(var_r64_2d, &data_R64_2d[0][0], WriteMode);
-            engine.Put(var_r64_2d_rev, &data_R64_2d_rev[0][0],
-                       adios2::Mode::Sync);
+            engine.Put(var_r64_2d, &data_R64_2d[0], WriteMode);
+            engine.Put(var_r64_2d_rev, &data_R64_2d_rev[0], adios2::Mode::Sync);
         }
         // Advance to the next time step
         std::time_t localtime = std::time(NULL);

@@ -32,15 +32,17 @@ add_library(adios2
   operator/callback/Signature2.cpp
 
 #helper
+  helper/adiosComm.h  helper/adiosComm.cpp
+  helper/adiosCommDummy.h  helper/adiosCommDummy.cpp
   helper/adiosDynamicBinder.h  helper/adiosDynamicBinder.cpp
   helper/adiosMath.cpp
   helper/adiosMemory.cpp
-  helper/adiosMPIFunctions.cpp
   helper/adiosNetwork.cpp
   helper/adiosString.cpp helper/adiosString.tcc
   helper/adiosSystem.cpp
   helper/adiosType.cpp
   helper/adiosXML.cpp
+  helper/adiosYAML.cpp
 
 #engine derived classes  
   engine/bp3/BP3Reader.cpp engine/bp3/BP3Reader.tcc
@@ -62,23 +64,36 @@ add_library(adios2
   toolkit/format/buffer/Buffer.cpp
   toolkit/format/buffer/heap/BufferSTL.cpp
 
-  toolkit/format/bp3/BP3Base.cpp toolkit/format/bp3/BP3Base.tcc
-  toolkit/format/bp3/BP3Serializer.cpp toolkit/format/bp3/BP3Serializer.tcc
-  toolkit/format/bp3/BP3Deserializer.cpp toolkit/format/bp3/BP3Deserializer.tcc
+  toolkit/format/bp/BPBase.cpp toolkit/format/bp/BPBase.tcc
+  toolkit/format/bp/BPSerializer.cpp toolkit/format/bp/BPSerializer.tcc
 
-  toolkit/format/bp4/BP4Base.cpp toolkit/format/bp4/BP4Base.tcc
-  toolkit/format/bp4/BP4Serializer.cpp toolkit/format/bp4/BP4Serializer.tcc
-  toolkit/format/bp4/BP4Deserializer.cpp toolkit/format/bp4/BP4Deserializer.tcc
+  toolkit/format/bp/bp3/BP3Base.cpp
+  toolkit/format/bp/bp3/BP3Serializer.cpp toolkit/format/bp/bp3/BP3Serializer.tcc
+  toolkit/format/bp/bp3/BP3Deserializer.cpp toolkit/format/bp/bp3/BP3Deserializer.tcc
+
+  toolkit/format/bp/bp4/BP4Base.cpp
+  toolkit/format/bp/bp4/BP4Serializer.cpp toolkit/format/bp/bp4/BP4Serializer.tcc
+  toolkit/format/bp/bp4/BP4Deserializer.cpp toolkit/format/bp/bp4/BP4Deserializer.tcc
   
-  toolkit/format/bpOperation/BPOperation.cpp toolkit/format/bpOperation/BPOperation.tcc
-  toolkit/format/bpOperation/compress/BPZFP.cpp toolkit/format/bpOperation/compress/BPZFP.tcc
-  toolkit/format/bpOperation/compress/BPSZ.cpp
-  toolkit/format/bpOperation/compress/BPMGARD.cpp
-  toolkit/format/bpOperation/compress/BPPNG.cpp
-  toolkit/format/bpOperation/compress/BPBZIP2.cpp toolkit/format/bpOperation/compress/BPBZIP2.tcc
-  toolkit/format/bpOperation/compress/BPBlosc.cpp
+  toolkit/format/bp/bpOperation/BPOperation.cpp 
+  toolkit/format/bp/bpOperation/BPOperation.tcc
+  toolkit/format/bp/bpOperation/compress/BPZFP.cpp 
+  toolkit/format/bp/bpOperation/compress/BPZFP.tcc
+  toolkit/format/bp/bpOperation/compress/BPSZ.cpp
+  toolkit/format/bp/bpOperation/compress/BPMGARD.cpp
+  toolkit/format/bp/bpOperation/compress/BPPNG.cpp
+  toolkit/format/bp/bpOperation/compress/BPBZIP2.cpp 
+  toolkit/format/bp/bpOperation/compress/BPBZIP2.tcc
+  toolkit/format/bp/bpOperation/compress/BPBlosc.cpp
   
   toolkit/profiling/iochrono/Timer.cpp
+  toolkit/profiling/iochrono/IOChrono.cpp
+
+  toolkit/query/Query.cpp
+  toolkit/query/Worker.cpp
+  toolkit/query/XmlUtil.cpp
+  toolkit/query/XmlWorker.cpp
+  toolkit/query/BlockIndex.cpp
 
   toolkit/transport/Transport.cpp
   toolkit/transport/file/FileStdio.cpp
@@ -96,7 +111,7 @@ target_include_directories(adios2
     $<BUILD_INTERFACE:${ADIOS2_BINARY_DIR}/source>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_link_libraries(adios2 PRIVATE adios2sys_interface pugixml taustubs)
+target_link_libraries(adios2 PRIVATE adios2sys_interface pugixml taustubs yaml-cpp)
 target_link_libraries(adios2 PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(adios2 PUBLIC ${ADIOS2_CXX11_FEATURES})
 
@@ -112,38 +127,55 @@ endif()
 
 if(ADIOS2_HAVE_ZeroMQ)
     target_sources(adios2 PRIVATE
-        toolkit/transport/socket/SocketZmq.cpp
-        toolkit/transport/socket/SocketZmqReqRep.cpp
-        toolkit/transport/socket/SocketZmqPubSub.cpp
-        toolkit/transportman/wanman/WANMan.cpp
-        toolkit/transportman/stagingman/StagingMan.cpp
+        toolkit/zmq/zmqreqrep/ZmqReqRep.cpp
+        toolkit/zmq/zmqpubsub/ZmqPubSub.cpp
         )
     target_link_libraries(adios2 PRIVATE ZeroMQ::ZMQ)
 endif()
 
-if(ADIOS2_HAVE_DataMan)
+#if (ADIOS2_HAVE_JSON)
+if (ADIOS2_HAVE_DataMan)
+    target_sources(adios2 PRIVATE
+	toolkit/query/JsonWorker.cpp			
+   	)
+    target_link_libraries(adios2 PRIVATE nlohmann_json)
+endif()
+
+if(ADIOS2_HAVE_DataMan OR ADIOS2_HAVE_Table)
     target_sources(adios2 PRIVATE
         toolkit/format/dataman/DataManSerializer.cpp
         toolkit/format/dataman/DataManSerializer.tcc
+    )
+    target_link_libraries(adios2 PRIVATE nlohmann_json)
+endif()
+
+
+if(ADIOS2_HAVE_DataMan)
+    target_sources(adios2 PRIVATE
         engine/dataman/DataManCommon.cpp
         engine/dataman/DataManReader.cpp
         engine/dataman/DataManReader.tcc
         engine/dataman/DataManWriter.cpp
         engine/dataman/DataManWriter.tcc
         )
-    target_link_libraries(adios2 PRIVATE nlohmann_json)
 endif()
 
 if(ADIOS2_HAVE_SSC)
     target_sources(adios2 PRIVATE
-        toolkit/format/dataman/DataManSerializer.cpp
-        toolkit/format/dataman/DataManSerializer.tcc
         engine/ssc/SscReader.cpp
         engine/ssc/SscReader.tcc
         engine/ssc/SscWriter.cpp
         engine/ssc/SscWriter.tcc
+        engine/ssc/SscHelper.cpp
         )
     target_link_libraries(adios2 PRIVATE nlohmann_json)
+endif()
+
+if(ADIOS2_HAVE_Table)
+    target_sources(adios2 PRIVATE
+        engine/table/TableWriter.cpp
+        engine/table/TableWriter.tcc
+    )
 endif()
 
 if(ADIOS2_HAVE_SST)
@@ -197,14 +229,13 @@ endif()
 
 if(ADIOS2_HAVE_MPI)
   target_sources(adios2 PRIVATE
+    helper/adiosCommMPI.h  helper/adiosCommMPI.cpp
     engine/insitumpi/InSituMPIWriter.cpp engine/insitumpi/InSituMPIWriter.tcc
     engine/insitumpi/InSituMPIReader.cpp engine/insitumpi/InSituMPIReader.tcc
     engine/insitumpi/InSituMPIFunctions.cpp engine/insitumpi/InSituMPISchedules.cpp
   )
   target_link_libraries(adios2 PUBLIC MPI::MPI_C)
 endif()
-
-target_sources(adios2 PRIVATE helper/mpidummy.cpp helper/mpiwrap.cpp)
 
 if(ADIOS2_HAVE_HDF5)
   if(HDF5_C_INCLUDE_DIRS)
@@ -235,7 +266,7 @@ endif()
 
 # Set library version information
 set_target_properties(adios2 PROPERTIES
-  VERSION ${ADIOS2_VERSION}
+  VERSION ${ADIOS2_LIBRARY_VERSION}
   SOVERSION ${ADIOS2_VERSION_MAJOR}
 )
 

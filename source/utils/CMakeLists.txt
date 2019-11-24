@@ -19,6 +19,14 @@ file(GENERATE
   INPUT ${PROJECT_BINARY_DIR}/bpls.cmake.gen
 )
 
+
+# BPSPLIT
+#add_executable(bpsplit ./bpsplit/bpsplit.cpp)
+#target_link_libraries(bpsplit adios2 adios2sys_interface pugixml)
+#install(TARGETS bpsplit EXPORT adios2
+#  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+#)
+
 # ADIOS_REORGANIZE
 add_executable(adios_reorganize 
                ./adios_reorganize/main.cpp 
@@ -32,6 +40,10 @@ install(TARGETS adios_reorganize EXPORT adios2
 # Add MPI dependency to parallel tools
 if(ADIOS2_HAVE_MPI)
   target_link_libraries(adios_reorganize MPI::MPI_C)
+endif()
+
+if(ADIOS2_HAVE_MGARD)
+  target_link_libraries(adios_reorganize MGARD::MGARD)
 endif()
 
 if(ADIOS2_HAVE_MPI)

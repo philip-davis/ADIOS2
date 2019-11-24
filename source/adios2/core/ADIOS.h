@@ -19,9 +19,9 @@
 /// \endcond
 
 #include "adios2/common/ADIOSConfig.h"
-#include "adios2/common/ADIOSMPI.h"
 #include "adios2/common/ADIOSTypes.h"
 #include "adios2/core/Operator.h"
+#include "adios2/helper/adiosComm.h"
 
 namespace adios2
 {
@@ -38,8 +38,8 @@ public:
     /** if true will do more checks, exceptions, warnings, expect slower code */
     const bool m_DebugMode = true;
 
-    /** Passed from parallel constructor, MPI_Comm is a pointer itself. */
-    MPI_Comm m_MPIComm;
+    /** Get the communicator passed to constructor for parallel case.  */
+    helper::Comm const &GetComm() const { return m_Comm; }
 
     /** Changed by language bindings in constructor */
     const std::string m_HostLanguage = "C++";
@@ -54,7 +54,7 @@ public:
      * false: optional feature to turn off checks on user input data,
      * recommended in stable flows
      */
-    ADIOS(const std::string configFile, MPI_Comm mpiComm, const bool debugMode,
+    ADIOS(const std::string configFile, helper::Comm comm, const bool debugMode,
           const std::string hostLanguage);
 
     /**
@@ -76,7 +76,7 @@ public:
      * false: optional feature to turn off checks on user input data,
      * recommended in stable flows
      */
-    ADIOS(MPI_Comm mpiComm, const bool debugMode,
+    ADIOS(helper::Comm comm, const bool debugMode,
           const std::string hostLanguage);
 
     /**
@@ -136,7 +136,7 @@ public:
      * @exception std::invalid_argument if Operator with unique name is already
      * defined, in debug mode only
      */
-    Operator &DefineOperator(const std::string name, const std::string type,
+    Operator &DefineOperator(const std::string &name, const std::string type,
                              const Params &parameters = Params());
     /**
      * Retrieve a reference pointer to an existing Operator object
@@ -144,7 +144,7 @@ public:
      * @return if IO exists returns a reference to existing IO object inside
      * ADIOS, otherwise a nullptr
      */
-    Operator *InquireOperator(const std::string name) noexcept;
+    Operator *InquireOperator(const std::string &name) noexcept;
 
 /** define CallBack1 */
 #define declare_type(T)                                                        \
@@ -184,6 +184,9 @@ public:
     void RemoveAllIOs() noexcept;
 
 private:
+    /** Communicator given to parallel constructor. */
+    helper::Comm m_Comm;
+
     /** XML File to be read containing configuration information */
     const std::string m_ConfigFile;
 
@@ -204,6 +207,8 @@ private:
     void CheckOperator(const std::string name) const;
 
     void XMLInit(const std::string &configFileXML);
+
+    void YAMLInit(const std::string &configFileYAML);
 };
 
 } // end namespace core
