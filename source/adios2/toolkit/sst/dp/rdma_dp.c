@@ -254,9 +254,37 @@ static void fini_fabric(struct fabric_state *fabric)
     {
         free(fabric->ctx);
     }
+
+#ifdef SST_HAVE_CRAY_DRC
+    if(Fabric->auth_key) {
+    	free(Fabric->auth_key);
+    }
+#endif /* SST_HAVE_CRAY_DRC */
 }
 
 typedef struct fabric_state *FabricState;
+
+/*
+ * Using a list structure for ReqLogEntry requires a malloc at every
+ * RdmaReadRemoteMemory until we enter preload mode. It might be better
+ * to preallocate a pool. We are going to be stuck iterating the list
+ * when we send the read pattern to the writers, so there is no value in
+ * serializing this list in memory (beyond the usual caching advantages.)
+ */
+typedef struct _RdmaReqLogEntry
+{
+	int Rank;
+	size_t Offset;
+	size_t Length;
+	struct _RdmaReqLogEntry *Next;
+} * RdmaReqLogEntry;
+
+typedef struct _RdmaStepLogEntry
+{
+	long Timestep;
+	RdmaReqLogEntry ReqLog;
+	struct _RdmaStepLogEntry *Next;
+} * RdmaStepLogEntry;
 
 typedef struct _Rdma_RS_Stream
 {
@@ -264,14 +292,31 @@ typedef struct _Rdma_RS_Stream
     void *CP_Stream;
     int Rank;
     FabricState Fabric;
+    long PreloadStep;
     struct _SstParams *Params;
+    struct _RdmaReaderContactInfo *ContactInfo;
+    RdmaStepLogEntry StepLog;
 
     /* writer info */
     int WriterCohortSize;
     CP_PeerCohort PeerCohort;
     struct _RdmaWriterContactInfo *WriterContactInfo;
+
     fi_addr_t *WriterAddr;
+    struct _RdmaBufferHandle *WriterRoll;
 } * Rdma_RS_Stream;
+
+typedef struct _RdmaBufferHandle
+{
+	uint8_t *Block;
+	uint64_t Key;
+} *RdmaBufferHandle;
+
+typedef struct _RdmaBuffer
+{
+	struct _RdmaBufferHandle Handle;
+	uint64_t BufferLen;
+} *RdmaBuffer;
 
 typedef struct _Rdma_WSR_Stream
 {
@@ -279,19 +324,18 @@ typedef struct _Rdma_WSR_Stream
     CP_PeerCohort PeerCohort;
     int ReaderCohortSize;
     struct _RdmaWriterContactInfo *WriterContactInfo;
+    struct _RdmaBuffer *ReaderRoll;
+    struct fid_mr *rrmr;
+    fi_addr_t *ReaderAddr;
+    int SelectLocked;
+    int Preload;
 } * Rdma_WSR_Stream;
-
-typedef struct _RdmaPerTimestepInfo
-{
-    uint8_t *Block;
-    uint64_t Key;
-} * RdmaPerTimestepInfo;
 
 typedef struct _TimestepEntry
 {
     long Timestep;
     struct _SstData *Data;
-    struct _RdmaPerTimestepInfo *DP_TimestepInfo;
+    struct _RdmaBufferHandle *DP_TimestepInfo;
     struct _TimestepEntry *Next;
     struct fid_mr *mr;
     uint64_t Key;
@@ -303,9 +347,8 @@ typedef struct _Rdma_WS_Stream
     void *CP_Stream;
     int Rank;
     FabricState Fabric;
-
+    int DefLocked;
     TimestepList Timesteps;
-
     int ReaderCount;
     Rdma_WSR_Stream *Readers;
 } * Rdma_WS_Stream;
@@ -313,6 +356,8 @@ typedef struct _Rdma_WS_Stream
 typedef struct _RdmaReaderContactInfo
 {
     void *RS_Stream;
+    size_t Length;
+    void *Address;
 } * RdmaReaderContactInfo;
 
 typedef struct _RdmaWriterContactInfo
@@ -320,9 +365,7 @@ typedef struct _RdmaWriterContactInfo
     void *WS_Stream;
     size_t Length;
     void *Address;
-#ifdef SST_HAVE_CRAY_DRC
-    int Credential;
-#endif /* SST_HAVE_CRAY_DRC */
+    struct _RdmaBufferHandle ReaderRollHandle;
 } * RdmaWriterContactInfo;
 
 static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
@@ -333,7 +376,9 @@ static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
     Rdma_RS_Stream Stream = malloc(sizeof(struct _Rdma_RS_Stream));
     CManager cm = Svcs->getCManager(CP_Stream);
     MPI_Comm comm = Svcs->getMPIComm(CP_Stream);
-    FabricState Fabric;
+    RdmaReaderContactInfo ContactInfo = malloc(sizeof(struct _RdmaReaderContactInfo));
+    FabricState Fabric = Stream->Fabric;
+    int rc;
 
     memset(Stream, 0, sizeof(*Stream));
 
@@ -343,8 +388,9 @@ static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
     Stream->CP_Stream = CP_Stream;
 
     MPI_Comm_rank(comm, &Stream->Rank);
-
     *ReaderContactInfoPtr = NULL;
+
+    ContactInfo->RS_Stream = Stream;
 
     if (Params)
     {
@@ -353,15 +399,51 @@ static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
     }
 
 #ifdef SST_HAVE_CRAY_DRC
-    int protection_key;
-    if (!get_int_attr(WriterContact, attr_atom_from_string("RDMA_DRC_KEY"),
-                      &protection_key))
+    long attr_cred;
+    if (!get_int_attr(WriterContact, attr_atom_from_string("RDMA_DRC_CRED"),
+                      &attr_cred))
     {
         Svcs->verbose(CP_Stream, "Didn't find DRC credential\n");
         return NULL;
     }
-    // do something with protection key?
-#endif
+    Fabric->credential = attr_cred;
+
+    rc = drc_access(Fabric->credential, 0, &Fabric->drc_info);
+    if (rc != DRC_SUCCESS)
+    {
+    	Svcs->verbose(CP_Stream,
+                      "Could not access DRC credential. Failed with %d.\n", rc);
+    	return NULL;
+    }
+
+    Fabric->auth_key = malloc(sizeof(*Fabric->auth_key));
+    Fabric->auth_key->type = GNIX_AKT_RAW;
+    Fabric->auth_key->raw.protection_key =
+    drc_get_first_cookie(Fabric->drc_info);
+    Svcs->verbose(CP_Stream, "Using protection key %08x.\n",
+                  Fabric->auth_key->raw.protection_key);
+
+#endif /* SST_HAVE_CRAY_DRC */
+
+    init_fabric(Stream->Fabric, Stream->Params);
+    if (!Fabric->info)
+    {
+    	Svcs->verbose(CP_Stream, "Could not find a valid transport fabric.\n");
+    	return NULL;
+    }
+
+    Svcs->verbose(CP_Stream, "Fabric Parameters:\n%s\n",
+                  fi_tostr(Fabric->info, FI_TYPE_INFO));
+
+    ContactInfo->Length = Fabric->info->src_addrlen;
+    ContactInfo->Address = malloc(ContactInfo->Length);
+    fi_getname((fid_t)Fabric->signal, ContactInfo->Address, &ContactInfo->Length);
+
+    Stream->PreloadStep = -1;
+    Stream->ContactInfo = ContactInfo;
+
+    *ReaderContactInfoPtr = ContactInfo;
+
     return Stream;
 }
 
@@ -425,9 +507,9 @@ static DP_WS_Stream RdmaInitWriter(CP_Services Svcs, void *CP_Stream,
         drc_get_first_cookie(Fabric->drc_info);
     Svcs->verbose(CP_Stream, "Using protection key %08x.\n",
                   Fabric->auth_key->raw.protection_key);
-
-    set_int_attr(DPAttrs, attr_atom_from_string("RDMA_DRC_KEY"),
-                 Fabric->auth_key->raw.protection_key);
+    long attr_cred = Fabric->credential;
+    set_long_attr(DPAttrs, attr_atom_from_string("RDMA_DRC_CRED"),
+                 attr_cred);
 
 #endif /* SST_HAVE_CRAY_DRC */
 
@@ -446,6 +528,8 @@ static DP_WS_Stream RdmaInitWriter(CP_Services Svcs, void *CP_Stream,
      * save the CP_stream value of later use
      */
     Stream->CP_Stream = CP_Stream;
+
+    Stream->DefLocked = -1;
 
     return (void *)Stream;
 
@@ -472,15 +556,26 @@ static DP_WSR_Stream RdmaInitWriterPerReader(CP_Services Svcs,
     Rdma_WSR_Stream WSR_Stream = malloc(sizeof(*WSR_Stream));
     FabricState Fabric = WS_Stream->Fabric;
     RdmaWriterContactInfo ContactInfo;
+    RdmaReaderContactInfo *providedReaderInfo = (RdmaReaderContactInfo *)providedReaderInfo_v;
     MPI_Comm comm = Svcs->getMPIComm(WS_Stream->CP_Stream);
-    int Rank;
-
-    MPI_Comm_rank(comm, &Rank);
+    RdmaBufferHandle ReaderRollHandle;
+    int i;
 
     WSR_Stream->WS_Stream = WS_Stream; /* pointer to writer struct */
     WSR_Stream->PeerCohort = PeerCohort;
 
     WSR_Stream->ReaderCohortSize = readerCohortSize;
+
+    WSR_Stream->ReaderAddr = calloc(readerCohortSize, sizeof(*WSR_Stream->ReaderAddr));
+
+    for(i = 0; i < readerCohortSize; i++) {
+    	fi_av_insert(Fabric->av, providedReaderInfo[i]->Address, 1, &WSR_Stream->ReaderAddr[i], 0, NULL);
+    	Svcs->verbose(WS_Stream->CP_Stream,
+    	                      "Received contact info for RS_Stream %p, WSR Rank %d\n",
+    	                      providedReaderInfo[i]->RS_Stream, i);
+    }
+
+
 
     /*
      * add this writer-side reader-specific stream to the parent writer stream
@@ -493,7 +588,7 @@ static DP_WSR_Stream RdmaInitWriterPerReader(CP_Services Svcs,
     WS_Stream->ReaderCount++;
     pthread_mutex_unlock(&wsr_mutex);
 
-    ContactInfo = malloc(sizeof(struct _RdmaWriterContactInfo));
+    ContactInfo = calloc(1, sizeof(struct _RdmaWriterContactInfo));
     memset(ContactInfo, 0, sizeof(struct _RdmaWriterContactInfo));
     ContactInfo->WS_Stream = WSR_Stream;
 
@@ -501,10 +596,21 @@ static DP_WSR_Stream RdmaInitWriterPerReader(CP_Services Svcs,
     ContactInfo->Address = malloc(ContactInfo->Length);
     fi_getname((fid_t)Fabric->signal, ContactInfo->Address,
                &ContactInfo->Length);
-#ifdef SST_HAVE_CRAY_DRC
-    ContactInfo->Credential = Fabric->credential;
-#endif /* SST_HAVE_CRAY_DRC */
+
+    ReaderRollHandle = &ContactInfo->ReaderRollHandle;
+    ReaderRollHandle->Block = calloc(readerCohortSize, sizeof(struct _RdmaBuffer));
+    fi_mr_reg(Fabric->domain, ReaderRollHandle->Block, readerCohortSize * sizeof(struct _RdmaBuffer), FI_REMOTE_WRITE, 0, 0, 0, &WSR_Stream->rrmr, Fabric->ctx);
+    ReaderRollHandle->Key = fi_mr_key(WSR_Stream->rrmr);
+
     WSR_Stream->WriterContactInfo = ContactInfo;
+
+    WSR_Stream->ReaderRoll = malloc(sizeof(struct _RdmaBuffer));
+    WSR_Stream->ReaderRoll->Handle = *ReaderRollHandle;
+    WSR_Stream->ReaderRoll->BufferLen = readerCohortSize * sizeof(struct _RdmaBuffer);
+
+    WSR_Stream->Preload = 0;
+    WSR_Stream->SelectLocked = -1;
+
     *WriterContactInfoPtr = ContactInfo;
 
     return WSR_Stream;
@@ -527,45 +633,11 @@ static void RdmaProvideWriterDataToReader(CP_Services Svcs,
     RS_Stream->WriterCohortSize = writerCohortSize;
     RS_Stream->WriterAddr =
         calloc(writerCohortSize, sizeof(*RS_Stream->WriterAddr));
+    RS_Stream->WriterRoll =  calloc(writerCohortSize, sizeof(*RS_Stream->WriterRoll));
 
     RS_Stream->Fabric = calloc(1, sizeof(struct fabric_state));
 
     Fabric = RS_Stream->Fabric;
-#ifdef SST_HAVE_CRAY_DRC
-    if (providedWriterInfo)
-    {
-        Fabric->credential = (*providedWriterInfo)->Credential;
-    }
-    else
-    {
-        Svcs->verbose(CP_Stream,
-                      "Writer contact info needed to access DRC credentials.\n",
-                      rc);
-    }
-
-    rc = drc_access(Fabric->credential, 0, &Fabric->drc_info);
-    if (rc != DRC_SUCCESS)
-    {
-        Svcs->verbose(CP_Stream,
-                      "Could not access DRC credential. Failed with %d.\n", rc);
-    }
-
-    Fabric->auth_key = malloc(sizeof(*Fabric->auth_key));
-    Fabric->auth_key->type = GNIX_AKT_RAW;
-    Fabric->auth_key->raw.protection_key =
-        drc_get_first_cookie(Fabric->drc_info);
-    Svcs->verbose(CP_Stream, "Using protection key %08x.\n",
-                  Fabric->auth_key->raw.protection_key);
-#endif /* SST_HAVE_CRAY_DRC */
-
-    init_fabric(RS_Stream->Fabric, RS_Stream->Params);
-    if (!Fabric->info)
-    {
-        Svcs->verbose(CP_Stream, "Could not find a valid transport fabric.\n");
-    }
-
-    Svcs->verbose(CP_Stream, "Fabric Parameters:\n%s\n",
-                  fi_tostr(Fabric->info, FI_TYPE_INFO));
 
     /*
      * make a copy of writer contact information (original will not be
@@ -573,12 +645,14 @@ static void RdmaProvideWriterDataToReader(CP_Services Svcs,
      */
     RS_Stream->WriterContactInfo =
         malloc(sizeof(struct _RdmaWriterContactInfo) * writerCohortSize);
+
     for (int i = 0; i < writerCohortSize; i++)
     {
         RS_Stream->WriterContactInfo[i].WS_Stream =
             providedWriterInfo[i]->WS_Stream;
         fi_av_insert(Fabric->av, providedWriterInfo[i]->Address, 1,
                      &RS_Stream->WriterAddr[i], 0, NULL);
+        RS_Stream->WriterRoll[i] = providedWriterInfo[i]->ReaderRollHandle;
         Svcs->verbose(RS_Stream->CP_Stream,
                       "Received contact info for WS_stream %p, WSR Rank %d\n",
                       RS_Stream->WriterContactInfo[i].WS_Stream, i);
@@ -591,13 +665,40 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
                                   void *DP_TimestepInfo)
 {
     Rdma_RS_Stream RS_Stream = (Rdma_RS_Stream)Stream_v;
+    RdmaStepLogEntry *StepLog_p;
+    RdmaStepLogEntry StepLog;
+    RdmaReqLogEntry LogEntry;
     FabricState Fabric = RS_Stream->Fabric;
-    RdmaPerTimestepInfo Info = (RdmaPerTimestepInfo)DP_TimestepInfo;
+    RdmaBufferHandle Info = (RdmaBufferHandle)DP_TimestepInfo;
     RdmaCompletionHandle ret = malloc(sizeof(struct _RdmaCompletionHandle));
     fi_addr_t SrcAddress;
     void *LocalDesc = NULL;
     uint8_t *Addr;
     ssize_t rc;
+
+    LogEntry = malloc(sizeof(*LogEntry));
+    LogEntry->Rank = Rank;
+    LogEntry->Offset = Offset;
+    LogEntry->Length = Length;
+
+    pthread_mutex_lock(&ts_mutex);
+    StepLog_p = &(RS_Stream->StepLog);
+    while(*StepLog_p && Timestep < (*StepLog_p)->Timestep) {
+    	StepLog_p = &((*StepLog_p)->Next);
+    }
+
+    if((*StepLog_p)->Timestep != Timestep) {
+    	StepLog = malloc(sizeof(*StepLog));
+    	StepLog->ReqLog = NULL;
+    	StepLog->Timestep = Timestep;
+    	StepLog->Next = *StepLog_p;
+    	*StepLog_p = StepLog;
+    } else {
+    	StepLog = *StepLog_p;
+    }
+    LogEntry->Next = StepLog->ReqLog;
+    StepLog->ReqLog = LogEntry;
+    pthread_mutex_unlock(&ts_mutex);
 
     Svcs->verbose(RS_Stream->CP_Stream,
                   "Performing remote read of Writer Rank %d\n", Rank);
@@ -717,7 +818,7 @@ static void RdmaProvideTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
 {
     Rdma_WS_Stream Stream = (Rdma_WS_Stream)Stream_v;
     TimestepList Entry = malloc(sizeof(struct _TimestepEntry));
-    RdmaPerTimestepInfo Info = malloc(sizeof(struct _RdmaPerTimestepInfo));
+    RdmaBufferHandle Info = malloc(sizeof(struct _RdmaBufferHandle));
     FabricState Fabric = Stream->Fabric;
 
     Entry->Data = malloc(sizeof(*Data));
@@ -751,7 +852,7 @@ static void RdmaReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
     Rdma_WS_Stream Stream = (Rdma_WS_Stream)Stream_v;
     TimestepList *List = &Stream->Timesteps;
     TimestepList ReleaseTSL;
-    RdmaPerTimestepInfo Info;
+    RdmaBufferHandle Info;
 
     Svcs->verbose(Stream->CP_Stream, "Releasing timestep %ld\n", Timestep);
 
@@ -788,16 +889,43 @@ static void RdmaReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
     free(ReleaseTSL);
 }
 
+static void RdmaDestroyReqLog(RdmaReqLogEntry ReqLog)
+{
+	RdmaReqLogEntry tmp;
+
+	while(ReqLog) {
+		tmp = ReqLog;
+		ReqLog = ReqLog->Next;
+		free(tmp);
+	}
+}
+
 static void RdmaDestroyReader(CP_Services Svcs, DP_RS_Stream RS_Stream_v)
 {
     Rdma_RS_Stream RS_Stream = (Rdma_RS_Stream)RS_Stream_v;
+    RdmaStepLogEntry StepLog = RS_Stream->StepLog;
+    RdmaStepLogEntry tStepLog;
 
     Svcs->verbose(RS_Stream->CP_Stream, "Tearing down RDMA state on reader.\n");
     fini_fabric(RS_Stream->Fabric);
 
+    while(StepLog) {
+    	RdmaDestroyReqLog(StepLog->ReqLog);
+    	tStepLog = StepLog;
+    	StepLog = StepLog->Next;
+    	free(tStepLog);
+    }
+
     free(RS_Stream->WriterContactInfo);
     free(RS_Stream->WriterAddr);
-    free(RS_Stream->Fabric);
+    free(RS_Stream->WriterRoll);
+    if(RS_Stream->ContactInfo) {
+    	free(RS_Stream->ContactInfo->Address);
+    	free(RS_Stream->ContactInfo);
+    }
+    if(RS_Stream->Fabric) {
+    	fini_fabric(RS_Stream->Fabric);
+    }
     free(RS_Stream);
 }
 
@@ -818,6 +946,10 @@ static void RdmaDestroyWriterPerReader(CP_Services Svcs,
             break;
         }
     }
+    fi_close((struct fid *)WSR_Stream->rrmr);
+    if(WSR_Stream->ReaderAddr) {
+    	free(WSR_Stream->ReaderAddr);
+    }
     WS_Stream->Readers = realloc(
         WS_Stream->Readers, sizeof(*WSR_Stream) * (WS_Stream->ReaderCount - 1));
     WS_Stream->ReaderCount--;
@@ -828,7 +960,15 @@ static void RdmaDestroyWriterPerReader(CP_Services Svcs,
         WriterContactInfo = WSR_Stream->WriterContactInfo;
         free(WriterContactInfo->Address);
     }
+    if(WriterContactInfo->ReaderRollHandle.Block) {
+    	free(WriterContactInfo->ReaderRollHandle.Block);
+    }
     free(WSR_Stream->WriterContactInfo);
+
+    if(WSR_Stream->ReaderRoll) {
+    	free(WSR_Stream->ReaderRoll);
+    }
+
     free(WSR_Stream);
 }
 
@@ -842,6 +982,16 @@ static FMStructDescRec RdmaReaderContactStructs[] = {
      sizeof(struct _RdmaReaderContactInfo), NULL},
     {NULL, NULL, 0, NULL}};
 
+static FMField RdmaBufferHandleList[] = {
+    {"Block", "integer", sizeof(void *), FMOffset(RdmaBufferHandle, Block)},
+    {"Key", "integer", sizeof(uint64_t), FMOffset(RdmaBufferHandle, Key)},
+    {NULL, NULL, 0, 0}};
+
+static FMStructDescRec RdmaBufferHandleStructs[] = {
+    {"RdmaBufferHandle", RdmaBufferHandleList, sizeof(struct _RdmaBufferHandle),
+     NULL},
+    {NULL, NULL, 0, NULL}};
+
 static void RdmaDestroyWriter(CP_Services Svcs, DP_WS_Stream WS_Stream_v)
 {
     Rdma_WS_Stream WS_Stream = (Rdma_WS_Stream)WS_Stream_v;
@@ -853,7 +1003,9 @@ static void RdmaDestroyWriter(CP_Services Svcs, DP_WS_Stream WS_Stream_v)
 #endif /* SST_HAVE_CRAY_DRC */
 
     Svcs->verbose(WS_Stream->CP_Stream, "Tearing down RDMA state on writer.\n");
-    fini_fabric(WS_Stream->Fabric);
+    if(WS_Stream->Fabric) {
+        fini_fabric(WS_Stream->Fabric);
+    }
 
 #ifdef SST_HAVE_CRAY_DRC
     if (WS_Stream->Rank == 0)
@@ -885,25 +1037,15 @@ static FMField RdmaWriterContactList[] = {
     {"Length", "integer", sizeof(int), FMOffset(RdmaWriterContactInfo, Length)},
     {"Address", "integer[Length]", sizeof(char),
      FMOffset(RdmaWriterContactInfo, Address)},
-#ifdef SST_HAVE_CRAY_DRC
-    {"Credential", "integer", sizeof(int),
-     FMOffset(RdmaWriterContactInfo, Credential)},
-#endif /* SST_HAVE_CRAY_DRC */
+	{"ReaderRollHandle", "RdmaBufferHandle", sizeof(struct _RdmaBufferHandle),
+	 FMOffset(RdmaWriterContactInfo, ReaderRollHandle)},
     {NULL, NULL, 0, 0}};
 
 static FMStructDescRec RdmaWriterContactStructs[] = {
     {"RdmaWriterContactInfo", RdmaWriterContactList,
      sizeof(struct _RdmaWriterContactInfo), NULL},
-    {NULL, NULL, 0, NULL}};
-
-static FMField RdmaTimestepInfoList[] = {
-    {"Block", "integer", sizeof(void *), FMOffset(RdmaPerTimestepInfo, Block)},
-    {"Key", "integer", sizeof(uint64_t), FMOffset(RdmaPerTimestepInfo, Key)},
-    {NULL, NULL, 0, 0}};
-
-static FMStructDescRec RdmaTimestepInfoStructs[] = {
-    {"RdmaTimestepInfo", RdmaTimestepInfoList,
-     sizeof(struct _RdmaPerTimestepInfo), NULL},
+	 {"RdmaBufferHandle", RdmaBufferHandleList, sizeof(struct _RdmaBufferHandle),
+	      NULL},
     {NULL, NULL, 0, NULL}};
 
 static struct _CP_DP_Interface RdmaDPInterface;
@@ -1015,12 +1157,55 @@ static void RdmaUnGetPriority(CP_Services Svcs, void *CP_Stream)
     Svcs->verbose(CP_Stream, "RDMA Dataplane unloading\n");
 }
 
+static void RdmaReadPatternLocked(CP_Services Svcs, DP_WSR_Stream WSRStream_v,
+                                  long EffectiveTimestep)
+{
+    Rdma_WSR_Stream WSR_Stream = (Rdma_WSR_Stream)WSRStream_v;
+    Rdma_WS_Stream WS_Stream = WSR_Stream->WS_Stream;
+
+    Svcs->verbose(WS_Stream->CP_Stream,
+                                 "read pattern is locked.\n");
+
+    WSR_Stream->SelectLocked = EffectiveTimestep;
+    WSR_Stream->Preload = 1;
+}
+
+static void RdmaWritePatternLocked(CP_Services Svcs, DP_RS_Stream Stream_v,
+                                  long EffectiveTimestep)
+{
+    Rdma_RS_Stream Stream = (Rdma_RS_Stream)Stream_v;
+
+    Stream->PreloadStep = EffectiveTimestep;
+    Svcs->verbose(Stream->CP_Stream,
+                             "write pattern is locked.\n");
+}
+
+static void RdmaReaderRegisterTimestep(CP_Services Svcs,
+                                       DP_WSR_Stream WSRStream_v, long Timestep,
+                                       SstPreloadModeType PreloadMode)
+{
+    Rdma_WSR_Stream WSR_Stream = (Rdma_WSR_Stream)WSRStream_v;
+    Rdma_WS_Stream WS_Stream = WSR_Stream->WS_Stream;
+
+    if (PreloadMode != SstPreloadNone && WS_Stream->DefLocked < 0)
+    {
+    	WS_Stream->DefLocked = Timestep;
+        if (WSR_Stream->SelectLocked >= 0)
+        {
+               Svcs->verbose(WS_Stream->CP_Stream,
+                                                    "enabling preload.\n");
+            WSR_Stream->Preload = 1;
+        }
+    }
+}
+
+
 extern CP_DP_Interface LoadRdmaDP()
 {
     memset(&RdmaDPInterface, 0, sizeof(RdmaDPInterface));
     RdmaDPInterface.ReaderContactFormats = RdmaReaderContactStructs;
     RdmaDPInterface.WriterContactFormats = RdmaWriterContactStructs;
-    RdmaDPInterface.TimestepInfoFormats = RdmaTimestepInfoStructs;
+    RdmaDPInterface.TimestepInfoFormats = RdmaBufferHandleStructs;
     RdmaDPInterface.initReader = RdmaInitReader;
     RdmaDPInterface.initWriter = RdmaInitWriter;
     RdmaDPInterface.initWriterPerReader = RdmaInitWriterPerReader;
@@ -1029,9 +1214,11 @@ extern CP_DP_Interface LoadRdmaDP()
     RdmaDPInterface.waitForCompletion = RdmaWaitForCompletion;
     RdmaDPInterface.notifyConnFailure = RdmaNotifyConnFailure;
     RdmaDPInterface.provideTimestep = RdmaProvideTimestep;
-    RdmaDPInterface.readerRegisterTimestep = NULL;
+    RdmaDPInterface.readerRegisterTimestep = RdmaReaderRegisterTimestep;
     RdmaDPInterface.releaseTimestep = RdmaReleaseTimestep;
     RdmaDPInterface.readerReleaseTimestep = NULL;
+    RdmaDPInterface.WSRreadPatternLocked = RdmaReadPatternLocked;
+    RdmaDPInterface.RSreadPatternLocked = RdmaWritePatternLocked;
     RdmaDPInterface.destroyReader = RdmaDestroyReader;
     RdmaDPInterface.destroyWriter = RdmaDestroyWriter;
     RdmaDPInterface.destroyWriterPerReader = RdmaDestroyWriterPerReader;
