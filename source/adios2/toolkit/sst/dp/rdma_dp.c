@@ -317,6 +317,7 @@ typedef struct _Rdma_RS_Stream
     long PreloadStep;
     int PreloadPosted;
     RdmaStepLogEntry StepLog;
+    RdmaStepLogEntry PreloadStepLog;
     struct _RdmaBuffer PreloadReqBuffer;
     struct _RdmaBuffer PreloadBuffer;
     struct fid_mr *pbmr;
@@ -690,7 +691,6 @@ static void LogRequest(CP_Services Svcs, Rdma_RS_Stream RS_Stream, int Rank,
     RdmaBuffer LogEntry;
     int LogIdx;
 
-    pthread_mutex_lock(&ts_mutex);
     StepLog_p = &(RS_Stream->StepLog);
     while (*StepLog_p && Timestep < (*StepLog_p)->Timestep)
     {
@@ -734,41 +734,18 @@ static void LogRequest(CP_Services Svcs, Rdma_RS_Stream RS_Stream, int Rank,
     LogEntry->BufferLen = Length;
     LogEntry->Offset = Offset;
     LogEntry->Handle.Block = NULL;
-    pthread_mutex_unlock(&ts_mutex);
 }
 
-static RdmaCompletionHandle PostRead(CP_Services Svcs, Rdma_RS_Stream RS_Stream,
-                                     int Rank, long Timestep, size_t Offset,
-                                     size_t Length, void *Buffer,
-                                     RdmaBufferHandle Info)
+static ssize_t PostRead(CP_Services Svcs, Rdma_RS_Stream RS_Stream, int Rank,
+                        long Timestep, size_t Offset, size_t Length,
+                        void *Buffer, RdmaBufferHandle Info,
+                        RdmaCompletionHandle ret)
 {
     FabricState Fabric = RS_Stream->Fabric;
-    RdmaCompletionHandle ret = malloc(sizeof(struct _RdmaCompletionHandle));
     fi_addr_t SrcAddress;
     void *LocalDesc = NULL;
     uint8_t *Addr;
     ssize_t rc;
-
-    Svcs->verbose(RS_Stream->CP_Stream,
-                  "Performing remote read of Writer Rank %d\n", Rank);
-
-    if (Info)
-    {
-        Svcs->verbose(RS_Stream->CP_Stream,
-                      "Block address is %p, with a key of %d\n", Info->Block,
-                      Info->Key);
-    }
-    else
-    {
-        Svcs->verbose(RS_Stream->CP_Stream, "Timestep info is null\n");
-    }
-
-    ret->CPStream = RS_Stream;
-    ret->Buffer = Buffer;
-    ret->Rank = Rank;
-    ret->Length = Length;
-    ret->Pending = 1;
-
     SrcAddress = RS_Stream->WriterAddr[Rank];
 
     if (Fabric->local_mr_req)
@@ -796,15 +773,36 @@ static RdmaCompletionHandle PostRead(CP_Services Svcs, Rdma_RS_Stream RS_Stream,
     {
         Svcs->verbose(RS_Stream->CP_Stream, "fi_read failed with code %d.\n",
                       rc);
-        free(ret);
-        return NULL;
+        return (rc);
+    }
+    else
+    {
+
+        Svcs->verbose(RS_Stream->CP_Stream,
+                      "Posted RDMA get for Writer Rank %d for handle %p\n",
+                      Rank, (void *)ret);
     }
 
-    Svcs->verbose(RS_Stream->CP_Stream,
-                  "Posted RDMA get for Writer Rank %d for handle %p\n", Rank,
-                  (void *)ret);
+    return (rc);
+}
 
-    return (ret);
+static RdmaReqLogEntry GetRequest(RdmaStepLogEntry StepLog, int Rank,
+                                  size_t Offset, size_t Length)
+{
+    RdmaRankReqLog RankLog = &StepLog->RankLog[Rank];
+    RdmaReqLogEntry Req;
+    int i;
+
+    for (i = 0; i < RankLog->Entries; i++)
+    {
+        Req = &RankLog->ReqLog[i];
+        if (Req->Length == Length && Req->Offset == Offset)
+        {
+            return (Req);
+        }
+    }
+
+    return (NULL);
 }
 
 static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
@@ -812,18 +810,70 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
                                   size_t Length, void *Buffer,
                                   void *DP_TimestepInfo)
 {
+    RdmaCompletionHandle ret = malloc(sizeof(struct _RdmaCompletionHandle));
     Rdma_RS_Stream RS_Stream = (Rdma_RS_Stream)Stream_v;
     RdmaBufferHandle Info = (RdmaBufferHandle)DP_TimestepInfo;
+    RdmaStepLogEntry StepLog;
+    RdmaRankReqLog RankLog;
+    int ReqFound = 0;
     ssize_t rc;
+    int i;
 
-    if (!RS_Stream->PreloadPosted)
+    Svcs->verbose(RS_Stream->CP_Stream,
+                  "Performing remote read of Writer Rank %d\n", Rank);
+
+    if (Info)
     {
-        LogRequest(Svcs, RS_Stream, Rank, Timestep, Offset, Length);
-        return (PostRead(Svcs, RS_Stream, Rank, Timestep, Offset, Length,
-                         Buffer, Info));
+        Svcs->verbose(RS_Stream->CP_Stream,
+                      "Block address is %p, with a key of %d\n", Info->Block,
+                      Info->Key);
+    }
+    else
+    {
+        Svcs->verbose(RS_Stream->CP_Stream, "Timestep info is null\n");
+        free(ret);
+        return (NULL);
     }
 
-    return (NULL);
+    ret->LocalMR = NULL;
+    ret->CPStream = RS_Stream;
+    ret->Buffer = Buffer;
+    ret->Rank = Rank;
+    ret->Length = Length;
+    ret->Pending = 1;
+
+    pthread_mutex_lock(&ts_mutex);
+    if (RS_Stream->PreloadPosted)
+    {
+        if (GetRequest(RS_Stream->PreloadStepLog, Rank, Offset, Length))
+        {
+        }
+        else
+        {
+            Svcs->verbose(Stream->CP_Stream,
+                          "read patterns are fixed, but new request to rank %d",
+                          Rank);
+            if (PostRead(Svcs, RS_Stream, Rank, Timestep, Offset, Length,
+                         Buffer, Info, ret) != 0)
+            {
+                free(ret);
+                return (NULL);
+            }
+        }
+    }
+    else
+    {
+        LogRequest(Svcs, RS_Stream, Rank, Timestep, Offset, Length);
+        if (PostRead(Svcs, RS_Stream, Rank, Timestep, Offset, Length, Buffer,
+                     Info, ret) != 0)
+        {
+            free(ret);
+            return (NULL);
+        }
+    }
+    pthread_mutex_unlock(&ts_mutex);
+
+    return (ret);
 }
 
 static void RdmaNotifyConnFailure(CP_Services Svcs, DP_RS_Stream Stream_v,
@@ -1296,7 +1346,6 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     RdmaBuffer CQBuffer;
     int i, j;
 
-    pthread_mutex_lock(&ts_mutex);
     StepLog = Stream->StepLog;
     while (StepLog)
     {
@@ -1310,10 +1359,10 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     {
         Svcs->verbose(Stream->CP_Stream, "trying to post preload data for a "
                                          "timestep with no access history.");
-        pthread_mutex_unlock(&ts_mutex);
         return;
     }
-    pthread_mutex_unlock(&ts_mutex);
+
+    Stream->PreloadStepLog = StepLog;
 
     PreloadBuffer->BufferLen = StepLog->BufferSize + sizeof(uint64_t);
     PreloadBuffer->Handle.Block = malloc(PreloadBuffer->BufferLen);
@@ -1387,11 +1436,14 @@ static void RdmaReaderReleaseTimestep(CP_Services Svcs, DP_RS_Stream Stream_v,
 {
     Rdma_RS_Stream Stream = (Rdma_RS_Stream)Stream_v;
 
+    pthread_mutex_lock(&ts_mutex);
     if (Stream->PreloadStep >= Timestep && !Stream->PreloadPosted)
     {
+        // TODO: Destroy all StepLog entries other than the one used for Preload
         PostPreload(Svcs, Stream, Timestep);
         Stream->PreloadPosted = 1;
     }
+    pthread_mutex_unlock(&ts_mutex);
 }
 
 extern CP_DP_Interface LoadRdmaDP()
