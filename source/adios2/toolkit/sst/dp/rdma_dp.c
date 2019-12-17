@@ -266,35 +266,6 @@ static void fini_fabric(struct fabric_state *fabric)
 
 typedef struct fabric_state *FabricState;
 
-/*
- * Using a list structure for ReqLogEntry requires a malloc at every
- * RdmaReadRemoteMemory until we enter preload mode. It might be better
- * to preallocate a pool. Also, we are going to have to colacte this list at
- * some point...definitely need an array instead.
- */
-typedef struct _RdmaReqLogEntry
-{
-    size_t Offset;
-    size_t Length;
-} * RdmaReqLogEntry;
-
-typedef struct _RdmaRankReqLog
-{
-    RdmaReqLogEntry ReqLog;
-    int Entries;
-    int Size;
-    void *Buffer;
-    long BufferSize;
-} * RdmaRankReqLog;
-
-typedef struct _RdmaStepLogEntry
-{
-    long Timestep;
-    RdmaRankReqLog RankLog;
-    struct _RdmaStepLogEntry *Next;
-    long BufferSize;
-} * RdmaStepLogEntry;
-
 typedef struct _RdmaBufferHandle
 {
     uint8_t *Block;
@@ -308,6 +279,34 @@ typedef struct _RdmaBuffer
     uint64_t Offset;
 } * RdmaBuffer;
 
+typedef struct _RdmaReqLogEntry
+{
+    size_t Offset;
+    size_t Length;
+} * RdmaReqLogEntry;
+
+typedef struct _RdmaRankReqLog
+{
+    // RdmaReqLogEntry ReqLog;
+    RdmaBuffer ReqLog;
+    int Entries;
+    int Size;
+    void *Buffer;
+    long BufferSize;
+    struct fid_mr *preqbmr;
+    // int WRidx;
+} * RdmaRankReqLog;
+
+typedef struct _RdmaStepLogEntry
+{
+    long Timestep;
+    RdmaRankReqLog RankLog;
+    struct _RdmaStepLogEntry *Next;
+    int Entries;
+    long BufferSize;
+    int WRanks;
+} * RdmaStepLogEntry;
+
 typedef struct _Rdma_RS_Stream
 {
     CManager cm;
@@ -318,6 +317,7 @@ typedef struct _Rdma_RS_Stream
     long PreloadStep;
     int PreloadPosted;
     RdmaStepLogEntry StepLog;
+    struct _RdmaBuffer PreloadReqBuffer;
     struct _RdmaBuffer PreloadBuffer;
     struct fid_mr *pbmr;
 
@@ -682,23 +682,13 @@ static void RdmaProvideWriterDataToReader(CP_Services Svcs,
     }
 }
 
-static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
-                                  int Rank, long Timestep, size_t Offset,
-                                  size_t Length, void *Buffer,
-                                  void *DP_TimestepInfo)
+static void LogRequest(CP_Services Svcs, Rdma_RS_Stream RS_Stream, int Rank,
+                       long Timestep, size_t Offset, size_t Length)
 {
-    Rdma_RS_Stream RS_Stream = (Rdma_RS_Stream)Stream_v;
     RdmaStepLogEntry *StepLog_p;
     RdmaStepLogEntry StepLog;
-    RdmaReqLogEntry LogEntry;
+    RdmaBuffer LogEntry;
     int LogIdx;
-    FabricState Fabric = RS_Stream->Fabric;
-    RdmaBufferHandle Info = (RdmaBufferHandle)DP_TimestepInfo;
-    RdmaCompletionHandle ret = malloc(sizeof(struct _RdmaCompletionHandle));
-    fi_addr_t SrcAddress;
-    void *LocalDesc = NULL;
-    uint8_t *Addr;
-    ssize_t rc;
 
     pthread_mutex_lock(&ts_mutex);
     StepLog_p = &(RS_Stream->StepLog);
@@ -715,6 +705,7 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
         StepLog->Timestep = Timestep;
         StepLog->Next = *StepLog_p;
         StepLog->BufferSize = 0;
+        StepLog->WRanks = 0;
         *StepLog_p = StepLog;
     }
     else
@@ -723,11 +714,13 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
     }
 
     StepLog->BufferSize += Length;
+    StepLog->Entries++;
     if (!StepLog->RankLog[Rank].ReqLog)
     {
         StepLog->RankLog[Rank].ReqLog =
             calloc(REQ_LIST_GRAN, sizeof(struct _RdmaRankReqLog));
         StepLog->RankLog[Rank].Size = REQ_LIST_GRAN;
+        StepLog->WRanks++;
     }
     if (StepLog->RankLog[Rank].Size == StepLog->RankLog[Rank].Entries)
     {
@@ -738,9 +731,23 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
     StepLog->RankLog[Rank].BufferSize += Length;
     LogIdx = StepLog->RankLog[Rank].Entries++;
     LogEntry = &StepLog->RankLog[Rank].ReqLog[LogIdx];
-    LogEntry->Length = Length;
+    LogEntry->BufferLen = Length;
     LogEntry->Offset = Offset;
+    LogEntry->Handle.Block = NULL;
     pthread_mutex_unlock(&ts_mutex);
+}
+
+static RdmaCompletionHandle PostRead(CP_Services Svcs, Rdma_RS_Stream RS_Stream,
+                                     int Rank, long Timestep, size_t Offset,
+                                     size_t Length, void *Buffer,
+                                     RdmaBufferHandle Info)
+{
+    FabricState Fabric = RS_Stream->Fabric;
+    RdmaCompletionHandle ret = malloc(sizeof(struct _RdmaCompletionHandle));
+    fi_addr_t SrcAddress;
+    void *LocalDesc = NULL;
+    uint8_t *Addr;
+    ssize_t rc;
 
     Svcs->verbose(RS_Stream->CP_Stream,
                   "Performing remote read of Writer Rank %d\n", Rank);
@@ -798,6 +805,25 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
                   (void *)ret);
 
     return (ret);
+}
+
+static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
+                                  int Rank, long Timestep, size_t Offset,
+                                  size_t Length, void *Buffer,
+                                  void *DP_TimestepInfo)
+{
+    Rdma_RS_Stream RS_Stream = (Rdma_RS_Stream)Stream_v;
+    RdmaBufferHandle Info = (RdmaBufferHandle)DP_TimestepInfo;
+    ssize_t rc;
+
+    if (!RS_Stream->PreloadPosted)
+    {
+        LogRequest(Svcs, RS_Stream, Rank, Timestep, Offset, Length);
+        return (PostRead(Svcs, RS_Stream, Rank, Timestep, Offset, Length,
+                         Buffer, Info));
+    }
+
+    return (NULL);
 }
 
 static void RdmaNotifyConnFailure(CP_Services Svcs, DP_RS_Stream Stream_v,
@@ -1256,8 +1282,19 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     long BufferSize = 0;
     FabricState Fabric = Stream->Fabric;
     RdmaBuffer PreloadBuffer = &Stream->PreloadBuffer;
-
-    int i;
+    RdmaRankReqLog RankLog;
+    RdmaBuffer SendBuffer;
+    struct fid_mr *sbmr;
+    void *sbdesc;
+    size_t SBSize;
+    RdmaBuffer ReqLog;
+    uint64_t PreloadKey;
+    char *RawPLBuffer;
+    int WRidx = 0;
+    uint64_t RollDest;
+    struct fi_cq_data_entry CQEntry = {0};
+    RdmaBuffer CQBuffer;
+    int i, j;
 
     pthread_mutex_lock(&ts_mutex);
     StepLog = Stream->StepLog;
@@ -1278,15 +1315,71 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     }
     pthread_mutex_unlock(&ts_mutex);
 
-    PreloadBuffer->BufferLen = StepLog->BufferSize + sizeof(long);
+    PreloadBuffer->BufferLen = StepLog->BufferSize + sizeof(uint64_t);
     PreloadBuffer->Handle.Block = malloc(PreloadBuffer->BufferLen);
-    fi_mr_reg(Fabric->domain, PreloadBuffer->Handle.Block, PreloadBuffer->BufferLen, FI_REMOTE_WRITE, 0, 0, 0, &Stream->pbmr, Fabric->ctx);
-    PreloadBuffer->Handle.Key = fi_mr_key(Stream->pbmr);
+    fi_mr_reg(Fabric->domain, PreloadBuffer->Handle.Block,
+              PreloadBuffer->BufferLen, FI_REMOTE_WRITE, 0, 0, 0, &Stream->pbmr,
+              Fabric->ctx);
+    PreloadKey = fi_mr_key(Stream->pbmr);
 
+    SBSize = sizeof(*SendBuffer) * StepLog->WRanks;
+    SendBuffer = malloc(SBSize);
+    fi_mr_reg(Fabric->domain, SendBuffer, SBSize, FI_WRITE, 0, 0, 0, &sbmr,
+              Fabric->ctx);
+    sbdesc = fi_mr_desc(sbmr);
 
-    for(i = 0; i < Stream->WriterCohortSize; i++) {
-
+    RawPLBuffer = PreloadBuffer->Handle.Block;
+    for (i = 0; i < Stream->WriterCohortSize; i++)
+    {
+        RankLog = &StepLog->RankLog[i];
+        if (RankLog->Entries > 0)
+        {
+            RankLog->Buffer = (void *)RawPLBuffer;
+            // RankLog->WRidx = WRidx++;
+            fi_mr_reg(Fabric->domain, RankLog->ReqLog,
+                      sizeof(struct _RdmaBuffer) * RankLog->Entries,
+                      FI_REMOTE_READ, 0, 0, 0, &RankLog->preqbmr, Fabric->ctx);
+            for (j = 0; j < RankLog->Entries; j++)
+            {
+                ReqLog = &RankLog->ReqLog[j];
+                ReqLog->Handle.Block = RawPLBuffer;
+                ReqLog->Handle.Key = PreloadKey;
+                RawPLBuffer += ReqLog->BufferLen;
+            }
+            SendBuffer[WRidx].BufferLen =
+                RankLog->Entries * sizeof(struct _RdmaBuffer);
+            SendBuffer[WRidx].Offset = 0;
+            SendBuffer[WRidx].Handle.Block = (void *)RankLog->ReqLog;
+            SendBuffer[WRidx].Handle.Key = fi_mr_key(RankLog->preqbmr);
+            RollDest = (uint64_t)Stream->WriterRoll[i].Block +
+                       (sizeof(struct _RdmaBuffer) * Stream->Rank);
+            fi_write(Fabric->signal, &SendBuffer[WRidx],
+                     sizeof(struct _RdmaBuffer), sbdesc, Stream->WriterAddr[i],
+                     RollDest, Stream->WriterRoll[i].Key, &SendBuffer[WRidx]);
+            WRidx++;
+        }
     }
+
+    while (WRidx > 0)
+    {
+        fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
+        CQBuffer = CQEntry.op_context;
+        if (CQBuffer >= SendBuffer && CQBuffer < (SendBuffer + StepLog->WRanks))
+        {
+            WRidx--;
+        }
+        else
+        {
+            Svcs->verbose(Stream->CP_Stream,
+                          "got unexpected completion while posting preload "
+                          "pattern. This is probably an error.\n");
+        }
+    }
+
+    *((uint64_t *)RawPLBuffer) = 0;
+
+    fi_close((struct fid *)sbmr);
+    free(SendBuffer);
 }
 
 static void RdmaReaderReleaseTimestep(CP_Services Svcs, DP_RS_Stream Stream_v,
