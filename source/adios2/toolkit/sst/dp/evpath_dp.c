@@ -300,6 +300,11 @@ static void EvpathDestroyReader(CP_Services Svcs, DP_RS_Stream RS_Stream_v)
 {
     Evpath_RS_Stream RS_Stream = (Evpath_RS_Stream)RS_Stream_v;
     DiscardPriorPreloaded(Svcs, RS_Stream, -1);
+    for (int i = 0; i < RS_Stream->WriterCohortSize; i++)
+    {
+        free(RS_Stream->WriterContactInfo[i].ContactString);
+    }
+    free(RS_Stream->WriterContactInfo);
     free(RS_Stream);
 }
 
@@ -722,18 +727,23 @@ static void EvpathProvideWriterDataToReader(CP_Services Svcs,
 static void AddRequestToList(CP_Services Svcs, Evpath_RS_Stream Stream,
                              EvpathCompletionHandle Handle)
 {
+    pthread_mutex_lock(&Stream->DataLock);
     Handle->Next = Stream->PendingReadRequests;
     Stream->PendingReadRequests = Handle;
+    pthread_mutex_unlock(&Stream->DataLock);
 }
 
 static void RemoveRequestFromList(CP_Services Svcs, Evpath_RS_Stream Stream,
                                   EvpathCompletionHandle Handle)
 {
-    EvpathCompletionHandle Tmp = Stream->PendingReadRequests;
+    EvpathCompletionHandle Tmp;
 
+    pthread_mutex_lock(&Stream->DataLock);
+    Tmp = Stream->PendingReadRequests;
     if (Stream->PendingReadRequests == Handle)
     {
         Stream->PendingReadRequests = Handle->Next;
+        pthread_mutex_unlock(&Stream->DataLock);
         return;
     }
 
@@ -743,26 +753,32 @@ static void RemoveRequestFromList(CP_Services Svcs, Evpath_RS_Stream Stream,
     }
 
     if (Tmp == NULL)
+    {
+        pthread_mutex_unlock(&Stream->DataLock);
         return;
+    }
 
     // Tmp->Next must be the handle to remove
     Tmp->Next = Tmp->Next->Next;
+    pthread_mutex_unlock(&Stream->DataLock);
 }
 
 static void FailRequestsToRank(CP_Services Svcs, CManager cm,
                                Evpath_RS_Stream Stream, int FailedRank)
 {
-    EvpathCompletionHandle Tmp = Stream->PendingReadRequests;
-    Svcs->verbose(Stream->CP_Stream,
-                  "Fail pending requests to writer rank %d\n", FailedRank);
+    EvpathCompletionHandle Tmp;
+    Svcs->verbose(Stream->CP_Stream, "Fail all pending requests on stream %p\n",
+                  Stream);
+    pthread_mutex_lock(&Stream->DataLock);
+    Tmp = Stream->PendingReadRequests;
     while (Tmp != NULL)
     {
-        if (Tmp->Rank == FailedRank)
+        if (Tmp->Failed != 1)
         {
             Tmp->Failed = 1;
             Svcs->verbose(Tmp->CPStream,
                           "Found a pending remote memory read "
-                          "to failed writer rank %d, marking as "
+                          "to writer rank %d, marking as "
                           "failed and signalling condition %d\n",
                           Tmp->Rank, Tmp->CMcondition);
             CMCondition_signal(cm, Tmp->CMcondition);
@@ -771,8 +787,9 @@ static void FailRequestsToRank(CP_Services Svcs, CManager cm,
         }
         Tmp = Tmp->Next;
     }
+    pthread_mutex_unlock(&Stream->DataLock);
     Svcs->verbose(Stream->CP_Stream,
-                  "Done Failing requests to writer rank %d\n", FailedRank);
+                  "Done Failing requests to writer from stream %p\n", Stream);
 }
 
 typedef struct _EvpathPerTimestepInfo
