@@ -266,6 +266,18 @@ static void fini_fabric(struct fabric_state *fabric)
 
 typedef struct fabric_state *FabricState;
 
+typedef struct _RdmaCompletionHandle
+{
+    struct fid_mr *LocalMR;
+    void *CPStream;
+    void *Buffer;
+    size_t Length;
+    int Rank;
+    int Pending;
+    double StartWTime;
+    void *PreloadBuffer;
+} * RdmaCompletionHandle;
+
 typedef struct _RdmaBufferHandle
 {
     uint8_t *Block;
@@ -477,18 +489,6 @@ static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
 
     return Stream;
 }
-
-typedef struct _RdmaCompletionHandle
-{
-    struct fid_mr *LocalMR;
-    void *CPStream;
-    void *Buffer;
-    size_t Length;
-    int Rank;
-    int Pending;
-    double StartWTime;
-    void *PreloadBuffer;
-} * RdmaCompletionHandle;
 
 static DP_WS_Stream RdmaInitWriter(CP_Services Svcs, void *CP_Stream,
                                    struct _SstParams *Params, attr_list DPAttrs)
@@ -870,6 +870,7 @@ static void *RdmaReadRemoteMemory(CP_Services Svcs, DP_RS_Stream Stream_v,
         if (Req)
         {
             ret->PreloadBuffer = Req->Handle.Block;
+            Req->Offset = (uint64_t)ret;
         }
         else
         {
@@ -923,21 +924,49 @@ static int DoPushWait(CP_Services Svcs, Rdma_RS_Stream Stream,
 {
     FabricState Fabric = Stream->Fabric;
     RdmaStepLogEntry StepLog = Stream->PreloadStepLog;
+    RdmaRankReqLog RankLog;
+    RdmaBuffer Req;
     RdmaCompletionHandle Handle_t;
     struct fi_cq_data_entry CQEntry = {0};
+    int WRank, WRidx;
 
-    while (*Stream->RecvCounter < StepLog->Entries)
+    while (Handle->Pending > 0)
     {
         ssize_t rc;
-        // TODO: tune timeout
-        rc = fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, 5);
+        rc = fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
         if (rc < 1)
         {
             Svcs->verbose(Stream->CP_Stream,
                           "failure while waiting for completions (%d).\n", rc);
             return 0;
         }
-        else if (rc > 0)
+        else if (CQEntry.flags | FI_REMOTE_CQ_DATA)
+        {
+            WRank = CQEntry.data >> 32;
+            WRidx = CQEntry.data & 0xFFFF;
+            Svcs->verbose(Stream->CP_Stream,
+                          "got completion for Rank %d, push request %d.\n",
+                          WRank, WRidx);
+            RankLog = &StepLog->RankLog[WRank];
+            Req = &RankLog->ReqLog[WRidx];
+            Handle_t = (RdmaCompletionHandle)Req->Offset;
+            if (Handle_t)
+            {
+                Handle_t->Pending--;
+                memcpy(Handle_t->Buffer, Req->Handle.Block, Handle_t->Length);
+                Req->Offset = 0;
+            }
+            else
+            {
+                /* We could see this if ReadRemote and WaitForCompletion calls
+                 * are interleaved. TODO: This needs attention. We could create
+                 * a new skeleton completion notice here. */
+                Svcs->verbose(
+                    Stream->CP_Stream,
+                    "Got push completion without a known handle...\n");
+            }
+        }
+        else
         {
             Svcs->verbose(Stream->CP_Stream,
                           "got completion for request with handle %p.\n",
@@ -946,6 +975,12 @@ static int DoPushWait(CP_Services Svcs, Rdma_RS_Stream Stream,
             Handle_t->Pending--;
         }
     }
+
+    if (Handle->LocalMR && Fabric->local_mr_req)
+    {
+        fi_close((struct fid *)Handle->LocalMR);
+    }
+
     return (1);
 }
 
@@ -1490,8 +1525,7 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
             SendBuffer[WRidx].BufferLen =
                 (RankLog->Entries * sizeof(struct _RdmaBuffer)) +
                 sizeof(uint64_t);
-            SendBuffer[WRidx].Offset = 0; // TODO: could we reuse this value for
-                                          // the RecvCounter address instead?
+            SendBuffer[WRidx].Offset = 0; // Store completion handle later
             SendBuffer[WRidx].Handle.Block = (void *)RankLog->ReqLog;
             SendBuffer[WRidx].Handle.Key = fi_mr_key(RankLog->preqbmr);
             RollDest = (uint64_t)Stream->WriterRoll[i].Block +
@@ -1602,6 +1636,7 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream, long Timestep)
     {
         for (i = 0; i <= RankReq->Entries; i++)
         {
+            uint64_t Data = ((uint64_t)WS_Stream->Rank << 32) | i;
             Req = &RankReq->ReqLog[i];
             fi_writedata(Fabric->signal, StepBuffer + Req->Offset,
                          Req->BufferLen, Step->Desc, (uint64_t)i,
