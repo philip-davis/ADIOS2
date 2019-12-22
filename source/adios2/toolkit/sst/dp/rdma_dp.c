@@ -287,14 +287,20 @@ typedef struct _RdmaReqLogEntry
 
 typedef struct _RdmaRankReqLog
 {
-    // RdmaReqLogEntry ReqLog;
     RdmaBuffer ReqLog;
     int Entries;
-    int MaxEntries;
+    union
+    {
+        int MaxEntries;
+        int Rank;
+    };
     void *Buffer;
     long BufferSize;
-    struct fid_mr *preqbmr;
-    // int WRidx;
+    union
+    {
+        struct fid_mr *preqbmr;
+        struct _RdmaRankReqLog *next;
+    };
 } * RdmaRankReqLog;
 
 typedef struct _RdmaStepLogEntry
@@ -347,6 +353,8 @@ typedef struct _Rdma_WSR_Stream
     fi_addr_t *ReaderAddr;
     int SelectLocked;
     int Preload;
+    int SelectionPulled;
+    RdmaRankReqLog PreloadReq;
 } * Rdma_WSR_Stream;
 
 typedef struct _TimestepEntry
@@ -356,6 +364,7 @@ typedef struct _TimestepEntry
     struct _RdmaBufferHandle *DP_TimestepInfo;
     struct _TimestepEntry *Next;
     struct fid_mr *mr;
+    void *Desc;
     uint64_t Key;
 } * TimestepList;
 
@@ -1009,10 +1018,15 @@ static void RdmaProvideTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
     memcpy(Entry->Data, Data, sizeof(*Data));
     Entry->Timestep = Timestep;
     Entry->DP_TimestepInfo = Info;
+    Entry->Desc = NULL;
 
-    fi_mr_reg(Fabric->domain, Data->block, Data->DataSize, FI_REMOTE_READ, 0, 0,
-              0, &Entry->mr, Fabric->ctx);
+    fi_mr_reg(Fabric->domain, Data->block, Data->DataSize,
+              FI_WRITE | FI_REMOTE_READ, 0, 0, 0, &Entry->mr, Fabric->ctx);
     Entry->Key = fi_mr_key(Entry->mr);
+    if (Fabric->local_mr_req)
+    {
+        Entry->Desc = fi_mr_desc(Entry->mr);
+    }
     pthread_mutex_lock(&ts_mutex);
     Entry->Next = Stream->Timesteps;
     Stream->Timesteps = Entry;
@@ -1458,7 +1472,6 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
         if (RankLog->Entries > 0)
         {
             RankLog->Buffer = (void *)RawPLBuffer;
-            // RankLog->WRidx = WRidx++;
             fi_mr_reg(Fabric->domain, RankLog->ReqLog,
                       sizeof(struct _RdmaBuffer) * RankLog->Entries,
                       FI_REMOTE_READ, 0, 0, 0, &RankLog->preqbmr, Fabric->ctx);
@@ -1475,8 +1488,10 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
             RecvCounterSB = (uint64_t *)(&RankLog->ReqLog[RankLog->Entries]);
             *RecvCounterSB = (uint64_t)RecvCounter;
             SendBuffer[WRidx].BufferLen =
-                RankLog->Entries * sizeof(struct _RdmaBuffer);
-            SendBuffer[WRidx].Offset = 0;
+                (RankLog->Entries * sizeof(struct _RdmaBuffer)) +
+                sizeof(uint64_t);
+            SendBuffer[WRidx].Offset = 0; // TODO: could we reuse this value for
+                                          // the RecvCounter address instead?
             SendBuffer[WRidx].Handle.Block = (void *)RankLog->ReqLog;
             SendBuffer[WRidx].Handle.Key = fi_mr_key(RankLog->preqbmr);
             RollDest = (uint64_t)Stream->WriterRoll[i].Block +
@@ -1554,6 +1569,145 @@ static void RdmaReaderReleaseTimestep(CP_Services Svcs, DP_RS_Stream Stream_v,
     // preload (yet.)
 }
 
+static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream, long Timestep)
+{
+    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
+    FabricState Fabric = WS_Stream->Fabric;
+    TimestepList Step = WS_Stream->Timesteps;
+    RdmaRankReqLog RankReq = Stream->PreloadReq;
+    RdmaBuffer Req;
+    uint64_t RecvCounter;
+    uint8_t *StepBuffer;
+    int i;
+
+    while (Step)
+    {
+        if (Step->Timestep == Timestep)
+        {
+            break;
+        }
+        Step = Step->Next;
+    }
+
+    if (!Step)
+    {
+        Svcs->verbose(WS_Stream->CP_Stream,
+                      "trying to push a step that we've never seen before.\n");
+        return;
+    }
+
+    StepBuffer = (uint8_t *)Step->Data->block;
+
+    while (RankReq)
+    {
+        for (i = 0; i <= RankReq->Entries; i++)
+        {
+            Req = &RankReq->ReqLog[i];
+            fi_writedata(Fabric->signal, StepBuffer + Req->Offset,
+                         Req->BufferLen, Step->Desc, (uint64_t)i,
+                         Stream->ReaderAddr[RankReq->Rank],
+                         (uint64_t)Req->Handle.Block, Req->Handle.Key, Req);
+        }
+        RankReq = RankReq->next;
+    }
+}
+
+static void PullSelection(CP_Services Svcs, Rdma_WSR_Stream Stream)
+{
+    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
+    FabricState Fabric = WS_Stream->Fabric;
+    RdmaBuffer ReaderRoll = (RdmaBuffer)Stream->ReaderRoll->Handle.Block;
+    struct _RdmaBuffer ReqBuffer;
+    struct fi_cq_data_entry CQEntry = {0};
+    struct fid_mr *rrmr = NULL;
+    void *rrdesc = NULL;
+    RdmaRankReqLog *RankReq_p = &Stream->PreloadReq;
+    RdmaRankReqLog RankReq;
+    uint8_t *ReadBuffer;
+    uint8_t *CQBuffer;
+    int i;
+
+    for (i = 0; i < Stream->ReaderCohortSize; i++)
+    {
+        if (ReaderRoll[i].BufferLen > 0)
+        {
+            RankReq = malloc(sizeof(struct _RdmaRankReqLog));
+            RankReq->Entries =
+                (ReaderRoll[i].BufferLen - sizeof(uint64_t)) /
+                sizeof(struct _RdmaBuffer); // piggyback the RecvCounter address
+            RankReq->ReqLog = malloc(ReaderRoll[i].BufferLen);
+            RankReq->BufferSize = ReaderRoll[i].BufferLen;
+            RankReq->next = NULL;
+            RankReq->Rank = i;
+            *RankReq_p = RankReq;
+            RankReq_p = &RankReq->next;
+            ReqBuffer.BufferLen += ReaderRoll[i].BufferLen;
+        }
+    }
+
+    ReqBuffer.Handle.Block = ReadBuffer = malloc(ReqBuffer.BufferLen);
+    if (Fabric->local_mr_req)
+    {
+        fi_mr_reg(Fabric->domain, ReqBuffer.Handle.Block, ReqBuffer.BufferLen,
+                  FI_READ, 0, 0, 0, &rrmr, Fabric->ctx);
+        rrdesc = fi_mr_desc(rrmr);
+    }
+
+    for (RankReq = Stream->PreloadReq; RankReq; RankReq = RankReq->next)
+    {
+        RankReq->Buffer = ReadBuffer;
+        fi_read(Fabric->signal, RankReq->Buffer, RankReq->BufferSize, rrdesc,
+                Stream->ReaderAddr[RankReq->Rank],
+                (uint64_t)ReaderRoll[RankReq->Rank].Handle.Block,
+                ReaderRoll[RankReq->Rank].Handle.Key,
+                &ReaderRoll[RankReq->Rank]);
+        ReadBuffer += RankReq->BufferSize;
+    }
+
+    RankReq = Stream->PreloadReq;
+    while (RankReq)
+    {
+        fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
+        CQBuffer = CQEntry.op_context;
+        if (CQBuffer >= ReqBuffer.Handle.Block &&
+            ReqBuffer.Handle.Block <
+                (ReqBuffer.Handle.Block + ReqBuffer.BufferLen))
+        {
+            RankReq = RankReq->next;
+        }
+        else
+        {
+            Svcs->verbose(
+                WS_Stream->CP_Stream,
+                "got unexpected completion while fetching preload patterns."
+                " This is probably an error.\n");
+        }
+    }
+
+    if (Fabric->local_mr_req)
+    {
+        fi_close((struct fid *)rrmr);
+    }
+}
+
+static void RdmaRelaseTimestepPerReader(CP_Services Svcs,
+                                        DP_WSR_Stream Stream_v, long Timestep)
+{
+    Rdma_WSR_Stream Stream = (Rdma_WSR_Stream)Stream_v;
+
+    if (Stream->Preload)
+    {
+        if (Stream->SelectionPulled)
+        {
+            PushData(Svcs, Stream, Timestep);
+        }
+        else
+        {
+            PullSelection(Svcs, Stream);
+        }
+    }
+}
+
 extern CP_DP_Interface LoadRdmaDP()
 {
     memset(&RdmaDPInterface, 0, sizeof(RdmaDPInterface));
@@ -1570,7 +1724,7 @@ extern CP_DP_Interface LoadRdmaDP()
     RdmaDPInterface.provideTimestep = RdmaProvideTimestep;
     RdmaDPInterface.readerRegisterTimestep = RdmaReaderRegisterTimestep;
     RdmaDPInterface.releaseTimestep = RdmaReleaseTimestep;
-    RdmaDPInterface.readerReleaseTimestep = NULL;
+    RdmaDPInterface.readerReleaseTimestep = RdmaRelaseTimestepPerReader;
     RdmaDPInterface.WSRreadPatternLocked = RdmaReadPatternLocked;
     RdmaDPInterface.RSreadPatternLocked = RdmaWritePatternLocked;
     RdmaDPInterface.RSReleaseTimestep = RdmaReaderReleaseTimestep;
