@@ -354,6 +354,18 @@ typedef struct _Rdma_RS_Stream
     int PendingReads;
 } * Rdma_RS_Stream;
 
+typedef struct _TimestepEntry
+{
+    long Timestep;
+    struct _SstData *Data;
+    struct _RdmaBufferHandle *DP_TimestepInfo;
+    struct _TimestepEntry *Prev, *Next;
+    struct fid_mr *mr;
+    void *Desc;
+    uint64_t Key;
+    uint64_t OutstandingWrites;
+} * TimestepList;
+
 typedef struct _Rdma_WSR_Stream
 {
     struct _Rdma_WS_Stream *WS_Stream;
@@ -367,19 +379,9 @@ typedef struct _Rdma_WSR_Stream
     int Preload;
     int SelectionPulled;
     RdmaRankReqLog PreloadReq;
+    TimestepList LastReleased;
+    int SendImmediately;
 } * Rdma_WSR_Stream;
-
-typedef struct _TimestepEntry
-{
-    long Timestep;
-    struct _SstData *Data;
-    struct _RdmaBufferHandle *DP_TimestepInfo;
-    struct _TimestepEntry *Next;
-    struct fid_mr *mr;
-    void *Desc;
-    uint64_t Key;
-    uint64_t OutstandingWrites;
-} * TimestepList;
 
 typedef struct _Rdma_WS_Stream
 {
@@ -407,6 +409,21 @@ typedef struct _RdmaWriterContactInfo
     void *Address;
     struct _RdmaBufferHandle ReaderRollHandle;
 } * RdmaWriterContactInfo;
+
+static TimestepList GetStep(Rdma_WS_Stream Stream, long Timestep)
+{
+    TimestepList Step;
+
+    pthread_mutex_lock(&ts_mutex);
+    Step = Stream->Timesteps;
+    while (Step && Step->Timestep != Timestep)
+    {
+        Step = Step->Prev;
+    }
+    pthread_mutex_unlock(&ts_mutex);
+
+    return (Step);
+}
 
 static DP_RS_Stream RdmaInitReader(CP_Services Svcs, void *CP_Stream,
                                    void **ReaderContactInfoPtr,
@@ -672,6 +689,9 @@ static DP_WSR_Stream RdmaInitWriterPerReader(CP_Services Svcs,
     WSR_Stream->Preload = 0;
     WSR_Stream->SelectionPulled = 0;
     WSR_Stream->SelectLocked = -1;
+
+    WSR_Stream->LastReleased = NULL;
+    WSR_Stream->SendImmediately = 0;
 
     *WriterContactInfoPtr = ContactInfo;
 
@@ -1090,7 +1110,12 @@ static void RdmaProvideTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
         Entry->Desc = fi_mr_desc(Entry->mr);
     }
     pthread_mutex_lock(&ts_mutex);
-    Entry->Next = Stream->Timesteps;
+    if (Stream->Timesteps)
+    {
+        Stream->Timesteps->Next = Entry;
+    }
+    Entry->Prev = Stream->Timesteps;
+    Entry->Next = NULL;
     Stream->Timesteps = Entry;
     // Probably doesn't need to be in the lock
     // |
@@ -1110,16 +1135,18 @@ static void RdmaReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
                                 long Timestep)
 {
     Rdma_WS_Stream Stream = (Rdma_WS_Stream)Stream_v;
+    Rdma_WSR_Stream WSR_Stream;
     TimestepList *List = &Stream->Timesteps;
     TimestepList ReleaseTSL;
     RdmaBufferHandle Info;
+    int i;
 
     Svcs->verbose(Stream->CP_Stream, "Releasing timestep %ld\n", Timestep);
 
     pthread_mutex_lock(&ts_mutex);
     while ((*List) && (*List)->Timestep != Timestep)
     {
-        List = &((*List)->Next);
+        List = &((*List)->Prev);
     }
 
     if ((*List) == NULL)
@@ -1134,7 +1161,7 @@ static void RdmaReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
     }
 
     ReleaseTSL = *List;
-    *List = ReleaseTSL->Next;
+    *List = ReleaseTSL->Prev;
     pthread_mutex_unlock(&ts_mutex);
     fi_close((struct fid *)ReleaseTSL->mr);
     if (ReleaseTSL->Data)
@@ -1431,12 +1458,44 @@ static void RdmaUnGetPriority(CP_Services Svcs, void *CP_Stream)
     Svcs->verbose(CP_Stream, "RDMA Dataplane unloading\n");
 }
 
+static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
+                     TimestepList Step)
+{
+    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
+    FabricState Fabric = WS_Stream->Fabric;
+    RdmaRankReqLog RankReq = Stream->PreloadReq;
+    RdmaBuffer Req;
+    uint64_t RecvCounter;
+    uint8_t *StepBuffer;
+    int i;
+
+    StepBuffer = (uint8_t *)Step->Data->block;
+
+    Step->OutstandingWrites = 0;
+    while (RankReq)
+    {
+        for (i = 0; i <= RankReq->Entries; i++)
+        {
+            uint64_t Data = ((uint64_t)WS_Stream->Rank << 20) | i;
+            Req = &RankReq->ReqLog[i];
+            fi_writedata(Fabric->signal, StepBuffer + Req->Offset,
+                         Req->BufferLen, Step->Desc, (uint64_t)i,
+                         Stream->ReaderAddr[RankReq->Rank],
+                         (uint64_t)Req->Handle.Block, Req->Handle.Key,
+                         (void *)(Step->Timestep));
+        }
+        Step->OutstandingWrites += RankReq->Entries;
+        RankReq = RankReq->next;
+    }
+}
+
 static void RdmaReaderRegisterTimestep(CP_Services Svcs,
                                        DP_WSR_Stream WSRStream_v, long Timestep,
                                        SstPreloadModeType PreloadMode)
 {
     Rdma_WSR_Stream WSR_Stream = (Rdma_WSR_Stream)WSRStream_v;
     Rdma_WS_Stream WS_Stream = WSR_Stream->WS_Stream;
+    TimestepList Step;
 
     if (PreloadMode != SstPreloadNone && WS_Stream->DefLocked < 0)
     {
@@ -1446,6 +1505,12 @@ static void RdmaReaderRegisterTimestep(CP_Services Svcs,
             Svcs->verbose(WS_Stream->CP_Stream, "enabling preload.\n");
             WSR_Stream->Preload = 1;
         }
+    }
+    if (WSR_Stream->SendImmediately)
+    {
+        Step = GetStep(WS_Stream, Timestep);
+        PushData(Svcs, WSR_Stream, Step);
+        WSR_Stream->SendImmediately = 0;
     }
 }
 
@@ -1539,7 +1604,6 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
             SendBuffer[WRidx].Handle.Key = fi_mr_key(RankLog->preqbmr);
             RollDest = (uint64_t)Stream->WriterRoll[i].Block +
                        (sizeof(struct _RdmaBuffer) * Stream->Rank);
-            printf("Key = %d\n", Stream->WriterRoll[i].Key); //
             fi_write(Fabric->signal, &SendBuffer[WRidx],
                      sizeof(struct _RdmaBuffer), sbdesc, Stream->WriterAddr[i],
                      RollDest, Stream->WriterRoll[i].Key, &SendBuffer[WRidx]);
@@ -1611,52 +1675,6 @@ static void RdmaReaderReleaseTimestep(CP_Services Svcs, DP_RS_Stream Stream_v,
 
     // This might be be a good spot to flush the Step list if we aren't doing
     // preload (yet.)
-}
-
-static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream, long Timestep)
-{
-    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
-    FabricState Fabric = WS_Stream->Fabric;
-    TimestepList Step = WS_Stream->Timesteps;
-    RdmaRankReqLog RankReq = Stream->PreloadReq;
-    RdmaBuffer Req;
-    uint64_t RecvCounter;
-    uint8_t *StepBuffer;
-    int i;
-
-    while (Step)
-    {
-        if (Step->Timestep == Timestep)
-        {
-            break;
-        }
-        Step = Step->Next;
-    }
-
-    if (!Step)
-    {
-        Svcs->verbose(WS_Stream->CP_Stream,
-                      "trying to push a step that we've never seen before.\n");
-        return;
-    }
-
-    StepBuffer = (uint8_t *)Step->Data->block;
-
-    Step->OutstandingWrites = 0;
-    while (RankReq)
-    {
-        for (i = 0; i <= RankReq->Entries; i++)
-        {
-            uint64_t Data = ((uint64_t)WS_Stream->Rank << 20) | i;
-            Req = &RankReq->ReqLog[i];
-            fi_writedata(
-                Fabric->signal, StepBuffer + Req->Offset, Req->BufferLen,
-                Step->Desc, (uint64_t)i, Stream->ReaderAddr[RankReq->Rank],
-                (uint64_t)Req->Handle.Block, Req->Handle.Key, (void *)Timestep);
-        }
-        Step->OutstandingWrites += RankReq->Entries;
-        RankReq = RankReq->next;
-    }
 }
 
 static void PullSelection(CP_Services Svcs, Rdma_WSR_Stream Stream)
@@ -1737,30 +1755,92 @@ static void PullSelection(CP_Services Svcs, Rdma_WSR_Stream Stream)
     }
 }
 
-static void CompletePush(CP_Services Svcs, DP_WSR_Stream Stream_v,
-                         long Timestep)
+static void CompletePush(CP_Services Svcs, Rdma_WSR_Stream Stream,
+                         TimestepList Step)
 {
+    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
+    FabricState Fabric = WS_Stream->Fabric;
+    TimestepList CQStep;
+    struct fi_cq_data_entry CQEntry = {0};
+    long *CQTimestep;
+
+    while (Step->OutstandingWrites > 0)
+    {
+        fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
+        if (CQEntry.flags | FI_WRITE)
+        {
+            CQTimestep = (long *)CQEntry.op_context;
+            if (*CQTimestep == Step->Timestep)
+            {
+                CQStep = Step;
+            }
+            else
+            {
+                Svcs->verbose(WS_Stream->CP_Stream,
+                              "while completing step %d, saw completion notice "
+                              "for step %d.\n",
+                              Step->Timestep, *CQTimestep);
+
+                CQStep = GetStep(WS_Stream, *CQTimestep);
+
+                if (!CQStep)
+                {
+                    Svcs->verbose(WS_Stream->CP_Stream,
+                                  "received completion for step %d, which we "
+                                  "don't know about.\n",
+                                  *CQTimestep);
+                }
+            }
+            CQStep->OutstandingWrites--;
+        }
+        else
+        {
+            Svcs->verbose(WS_Stream->CP_Stream,
+                          "while waiting for push to complete, saw an unknown "
+                          "completion. This is probably an error.\n");
+        }
+    }
 }
 
 static void RdmaRelaseTimestepPerReader(CP_Services Svcs,
                                         DP_WSR_Stream Stream_v, long Timestep)
 {
     Rdma_WSR_Stream Stream = (Rdma_WSR_Stream)Stream_v;
+    Rdma_WS_Stream WS_Stream = Stream->WS_Stream;
+    TimestepList Step = GetStep(WS_Stream, Timestep);
+
+    if (!Step)
+    {
+        return;
+    }
 
     if (Stream->Preload)
     {
         if (Stream->SelectionPulled)
         {
             // Make sure all writes for this timestep have completed
-            CompletePush(Svcs, Stream, Timestep);
+            CompletePush(Svcs, Stream, Step);
             // If data has been provided for the next timestep, push it
-            PushData(Svcs, Stream, Timestep);
+            if (Step->Next)
+            {
+                /* TODO: this isn't quite right; some timesteps might not be
+                 * registered for a given reader. */
+                PushData(Svcs, Stream, Step->Next);
+            }
+            else
+            {
+                Stream->SendImmediately = 1;
+            }
         }
         else
         {
             PullSelection(Svcs, Stream);
         }
     }
+
+    pthread_mutex_lock(&ts_mutex);
+    Stream->LastReleased = Step;
+    pthread_mutex_unlock(&ts_mutex);
 }
 
 extern CP_DP_Interface LoadRdmaDP()
