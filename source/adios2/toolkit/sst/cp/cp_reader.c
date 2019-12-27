@@ -1321,8 +1321,8 @@ extern void SstReleaseStep(SstStream Stream)
     TAU_START_FUNC();
     if (Stream->DP_Interface->RSReleaseTimestep)
     {
-    	(Stream->DP_Interface->RSReleaseTimestep)(
-    			&Svcs, Stream->DP_Stream, Timestep);
+        (Stream->DP_Interface->RSReleaseTimestep)(&Svcs, Stream->DP_Stream,
+                                                  Timestep);
     }
 
     if ((Stream->WriterConfigParams->CPCommPattern == SstCPCommPeer) ||
