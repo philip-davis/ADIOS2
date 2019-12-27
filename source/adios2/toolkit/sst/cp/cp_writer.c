@@ -27,6 +27,8 @@ static void sendOneToEachWriterRank(SstStream s, CMFormat f, void *Msg,
 static void CP_PeerFailCloseWSReader(WS_ReaderInfo CP_WSR_Stream,
                                      enum StreamStatus NewState);
 
+static void ProcessReleaseList(SstStream Stream, ReturnMetadataInfo Metadata);
+
 static int locked = 0;
 #ifdef MUTEX_DEBUG
 #define PTHREAD_MUTEX_LOCK(lock)                                               \
@@ -1392,15 +1394,14 @@ void SstWriterClose(SstStream Stream)
     struct _WriterCloseMsg Msg;
     struct timeval CloseTime, Diff;
     Msg.FinalTimestep = Stream->LastProvidedTimestep;
+    ReturnMetadataInfo ReleaseData;
     SST_ASSERT_UNLOCKED();
     sendOneToEachReaderRank(Stream, Stream->CPInfo->WriterCloseFormat, &Msg,
                             &Msg.RS_Stream);
-
     PTHREAD_MUTEX_LOCK(&Stream->DataLock);
     UntagPreciousTimesteps(Stream);
     Stream->ConfigParams->ReserveQueueLimit = 0;
     QueueMaintenance(Stream);
-
     PTHREAD_MUTEX_UNLOCK(&Stream->DataLock);
 
     // sleep briefly to allow for outgoing close messages to arrive
@@ -1410,6 +1411,16 @@ void SstWriterClose(SstStream Stream)
         (Stream->Rank == 0))
     {
         PTHREAD_MUTEX_LOCK(&Stream->DataLock);
+        if (Stream->ReleaseCount > 0)
+        {
+            SMPI_Bcast(&Stream->ReleaseCount, 1, MPI_INT, 0, Stream->mpiComm);
+            SMPI_Bcast(Stream->ReleaseList,
+                       Stream->ReleaseCount * sizeof(*(Stream->ReleaseList)),
+                       MPI_BYTE, 0, Stream->mpiComm);
+            Stream->ReleaseCount = 0;
+            free(Stream->ReleaseList);
+            Stream->ReleaseList = NULL;
+        }
         while (Stream->QueuedTimesteps)
         {
             CP_verbose(Stream,
@@ -1424,7 +1435,7 @@ void SstWriterClose(SstStream Stream)
                 {
                     char tmp[20];
                     CP_verbose(Stream,
-                               "IN TS WAIT, ENTRIES areTimestep %ld (exp %d, "
+                               "IN TS WAIT, ENTRIES are Timestep %ld (exp %d, "
                                "Prec %d, Ref %d), Count now %d\n",
                                List->Timestep, List->Expired,
                                List->PreciousTimestep, List->ReferenceCount,
@@ -1449,17 +1460,59 @@ void SstWriterClose(SstStream Stream)
             /* NEED TO HANDLE FAILURE HERE */
             pthread_cond_wait(&Stream->DataCondition, &Stream->DataLock);
             SST_REAFFIRM_LOCKED_AFTER_CONDITION();
+            SMPI_Bcast(&Stream->ReleaseCount, 1, MPI_INT, 0, Stream->mpiComm);
+            if (Stream->ReleaseCount > 0)
+            {
+                SMPI_Bcast(Stream->ReleaseList,
+                           Stream->ReleaseCount *
+                               sizeof(*(Stream->ReleaseList)),
+                           MPI_BYTE, 0, Stream->mpiComm);
+                Stream->ReleaseCount = 0;
+                free(Stream->ReleaseList);
+                Stream->ReleaseList = NULL;
+            }
         }
+        Stream->ReleaseCount = -1;
+        SMPI_Bcast(&Stream->ReleaseCount, 1, MPI_INT, 0, Stream->mpiComm);
+        Stream->ReleaseCount = 0;
         PTHREAD_MUTEX_UNLOCK(&Stream->DataLock);
     }
+
     if (Stream->ConfigParams->CPCommPattern == SstCPCommMin)
     {
+        if (Stream->Rank != 0)
+        {
+            ReleaseData = malloc(sizeof(*ReleaseData));
+            while (1)
+            {
+                SMPI_Bcast(&ReleaseData->ReleaseCount, 1, MPI_INT, 0,
+                           Stream->mpiComm);
+                if (ReleaseData->ReleaseCount == -1)
+                {
+                    break;
+                }
+                else if (ReleaseData->ReleaseCount > 0)
+                {
+                    ReleaseData->ReleaseList =
+                        malloc(ReleaseData->ReleaseCount *
+                               sizeof(*ReleaseData->ReleaseList));
+                    SMPI_Bcast(ReleaseData->ReleaseList,
+                               ReleaseData->ReleaseCount *
+                                   sizeof(*(ReleaseData->ReleaseList)),
+                               MPI_BYTE, 0, Stream->mpiComm);
+                    ProcessReleaseList(Stream, ReleaseData);
+                    free(ReleaseData->ReleaseList);
+                    ReleaseData->ReleaseList = NULL;
+                }
+            }
+            free(ReleaseData);
+        }
         /*
          * if we're CommMin, getting here implies that Rank 0 has released all
          * timesteps, other ranks can follow suit after barrier
          */
         SMPI_Barrier(Stream->mpiComm);
-        ReleaseAndDiscardRemainingTimesteps(Stream);
+        // ReleaseAndDiscardRemainingTimesteps(Stream);
     }
     gettimeofday(&CloseTime, NULL);
     timersub(&CloseTime, &Stream->ValidStartTime, &Diff);
