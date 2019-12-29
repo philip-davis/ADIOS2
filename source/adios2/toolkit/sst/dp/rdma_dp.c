@@ -1021,7 +1021,7 @@ static int DoPushWait(CP_Services Svcs, Rdma_RS_Stream Stream,
     {
         ssize_t rc;
         rc = fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
-        fprintf(stderr, "Got completion\n");
+        fprintf(stderr, "Rank %d got completion\n", Stream->Rank);
         if (rc < 1)
         {
             Svcs->verbose(Stream->CP_Stream,
@@ -1513,7 +1513,7 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
     RdmaBuffer Req, ReaderRoll, RollBuffer;
     uint64_t RecvCounter;
     uint8_t *StepBuffer;
-    int i;
+    int i, rc;
 
     fprintf(stderr, "rank %d %s\n", WS_Stream->Rank, __func__);
 
@@ -1535,11 +1535,17 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
                     "%li\n",
                     StepBuffer, Req->Offset, Req->BufferLen, Data,
                     Req->Handle.Block, RollBuffer->Offset);
-            fi_writedata(Fabric->signal, StepBuffer + Req->Offset,
+            do {
+                rc = fi_writedata(Fabric->signal, StepBuffer + Req->Offset,
                          Req->BufferLen, Step->Desc, Data,
                          Stream->ReaderAddr[RankReq->Rank],
                          (uint64_t)Req->Handle.Block, RollBuffer->Offset,
                          (void *)(Step->Timestep));
+            } while(rc == -EAGAIN);
+            if (rc != 0)
+            {
+                Svcs->verbose(WS_Stream->CP_Stream, "fi_read failed with code %d.\n", rc);
+            }
         }
         Step->OutstandingWrites += RankReq->Entries;
         RankReq = RankReq->next;
@@ -1603,6 +1609,7 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     uint64_t *RecvCounterSB;
     RdmaBuffer CQBuffer;
     size_t RBLen;
+    int rc;
     int i, j;
 
     fprintf(stderr, "rank %d: %s\n", Stream->Rank, __func__);
@@ -1657,8 +1664,11 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
         RecvBuffer = (uint8_t *)Stream->RecvDataBuffer;
         for (i = 0; i < StepLog->Entries; i++)
         {
-            fi_recv(Fabric->signal, Stream->RecvDataBuffer, DP_DATA_RECV_SIZE,
+            rc = fi_recv(Fabric->signal, RecvBuffer, DP_DATA_RECV_SIZE,
                     Stream->rbdesc, FI_ADDR_UNSPEC, Fabric->ctx);
+            if(rc) {
+                fprintf(stderr, "Rank %d, fi_recv failed.\n", Stream->Rank);
+            }
             RecvBuffer += DP_DATA_RECV_SIZE;
         }
     }
