@@ -37,8 +37,10 @@ void printUsage()
 
 int main(int argc, char *argv[])
 {
+    int a = 0;
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
     MPI_Init(&argc, &argv);
-
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
     /* When writer and reader is launched together with a single mpirun command,
        the world comm spans all applications. We have to split and create the
        local 'world' communicator mpiHeatTransferComm for the writer only.
@@ -49,15 +51,16 @@ int main(int argc, char *argv[])
     int wrank, wnproc;
     MPI_Comm_rank(MPI_COMM_WORLD, &wrank);
     MPI_Comm_size(MPI_COMM_WORLD, &wnproc);
-
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
     const unsigned int color = 1;
-    MPI_Comm mpiHeatTransferComm;
-    MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiHeatTransferComm);
+    MPI_Comm mpiHeatTransferComm = MPI_COMM_WORLD;
+    //MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiHeatTransferComm);
+    
 
     int rank, nproc;
     MPI_Comm_rank(mpiHeatTransferComm, &rank);
     MPI_Comm_size(mpiHeatTransferComm, &nproc);
-
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
     try
     {
         double timeStart = MPI_Wtime();
@@ -70,6 +73,11 @@ int main(int argc, char *argv[])
         ht.heatEdges();
         ht.exchange(mpiHeatTransferComm);
         // ht.printT("Heated T:", mpiHeatTransferComm);
+
+        if(rank == 0)
+        {
+            std::cout << "Total step size: " << ((long)settings.gndx * (long)settings.gndy) * 8 << " bytes" << std::endl;
+        }
 
         io.write(0, ht, settings, mpiHeatTransferComm);
 
@@ -108,6 +116,10 @@ int main(int argc, char *argv[])
         std::cout << e.what() << std::endl;
     }
 
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
+
     MPI_Finalize();
+
+    std::cout<<"HELLO WORLD " << a++ <<std::endl;
     return 0;
 }
