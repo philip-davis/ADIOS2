@@ -1059,18 +1059,9 @@ static int DoPushWait(CP_Services Svcs, Rdma_RS_Stream Stream,
         }
         else if (CQEntry.flags & FI_REMOTE_CQ_DATA)
         {
-            WRidx = CQEntry.data >> 20;
+            BufferSlot = CQEntry.data >> 31;
+            WRidx = (CQEntry.data >> 20) & 0x3FF;
             WRank = CQEntry.data & 0x0FFFFF;
-            if ((uint8_t *)CQEntry.buf >=
-                ((uint8_t *)Stream->PreloadBuffer.Handle.Block +
-                 StepLog->BufferSize))
-            {
-                BufferSlot = 1;
-            }
-            else
-            {
-                BufferSlot = 0;
-            }
             fprintf(stderr, "rank %d, incoming push is to bin %d\n",
                     Stream->Rank, BufferSlot);
 
@@ -1569,8 +1560,8 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
     uint8_t *StepBuffer;
     int i, rc;
 
-    fprintf(stderr, "rank %d %s, %li\n", WS_Stream->Rank, __func__,
-            Step->Timestep);
+    fprintf(stderr, "rank %d %s, %li to slot %d\n", WS_Stream->Rank, __func__,
+            Step->Timestep, BufferSlot);
 
     StepBuffer = (uint8_t *)Step->Data->block;
     ReaderRoll = (RdmaBuffer)Stream->ReaderRoll->Handle.Block;
@@ -1584,6 +1575,7 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
         {
             // TODO: this can only handle 4096 requests per reader rank. Fix.
             uint64_t Data = ((uint64_t)i << 20) | WS_Stream->Rank;
+            Data |= BufferSlot << 31;
             Req = &RankReq->ReqLog[i];
             fprintf(stderr,
                     "StepBuffer = %p, Req->Offset = %li, Req->BufferLen = %li, "
@@ -1708,13 +1700,13 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
 
     if (Fabric->rx_cq_data)
     {
-        RBLen = StepLog->Entries * DP_DATA_RECV_SIZE;
+        RBLen = 2 * StepLog->Entries * DP_DATA_RECV_SIZE;
         Stream->RecvDataBuffer = malloc(RBLen);
         fi_mr_reg(Fabric->domain, Stream->RecvDataBuffer, RBLen, FI_RECV, 0, 0,
                   0, &Stream->rbmr, Fabric->ctx);
         Stream->rbdesc = fi_mr_desc(Stream->rbmr);
         RecvBuffer = (uint8_t *)Stream->RecvDataBuffer;
-        for (i = 0; i < StepLog->Entries; i++)
+        for (i = 0; i < 2 * StepLog->Entries; i++)
         {
             rc = fi_recv(Fabric->signal, RecvBuffer, DP_DATA_RECV_SIZE,
                          Stream->rbdesc, FI_ADDR_UNSPEC, Fabric->ctx);
@@ -1899,9 +1891,7 @@ static void PullSelection(CP_Services Svcs, Rdma_WSR_Stream Stream)
         fprintf(stderr, "About to fi_cq_sread\n");
         fi_cq_sread(Fabric->cq_signal, (void *)(&CQEntry), 1, NULL, -1);
         CQRankReq = CQEntry.op_context;
-        if ((uint8_t *)CQEntry.buf >= ReqBuffer.Handle.Block &&
-            (uint8_t *)CQEntry.buf <
-                (ReqBuffer.Handle.Block + ReqBuffer.BufferLen))
+        if(CQEntry.flags & FI_READ)
         {
             CQReqLog = CQRankReq->ReqLog;
             fprintf(stderr,
