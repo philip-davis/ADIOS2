@@ -76,7 +76,7 @@ int main(int argc, char *argv[])
 
     const unsigned int color = 2;
     MPI_Comm mpiReaderComm = MPI_COMM_WORLD;
-    //MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiReaderComm);
+    // MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiReaderComm);
 
     int rank, nproc;
     MPI_Comm_rank(mpiReaderComm, &rank);
@@ -125,10 +125,11 @@ int main(int argc, char *argv[])
         while (true)
         {
 
-            if(!firstStep) {
+            if (!firstStep)
+            {
                 MPI_Barrier(mpiReaderComm);
                 timeStart = MPI_Wtime();
-            }    
+            }
 
             adios2::StepStatus status =
                 reader.BeginStep(adios2::StepMode::Read);
@@ -204,18 +205,21 @@ int main(int argc, char *argv[])
 
             stepTime = timeEnd - timeStart;
 
-            if(rank == 0) {
-                std::cout << "step " << step << " read in " << stepTime << " s." << std::endl;
+            if (rank == 0)
+            {
+                std::cout << "step " << step << " read in " << stepTime << " s."
+                          << std::endl;
             }
 
-            if(step > 1) {
+            if (step > 1)
+            {
                 totalTime += stepTime;
             }
 
             /* Compute dT from current T (Tin) and previous T (Tout)
              * and save Tin in Tout for output and for future computation
              */
-            //Compute(Tin, Tout, dT, firstStep);
+            // Compute(Tin, Tout, dT, firstStep);
 
             /* Output Tout and dT */
             writer.BeginStep();
@@ -239,8 +243,10 @@ int main(int argc, char *argv[])
         printUsage();
     }
 
-    if(rank == 0) {
-        std::cout << "Total read time = " <<  totalTime << " s (ignore first two)\n";
+    if (rank == 0)
+    {
+        std::cout << "Total read time = " << totalTime
+                  << " s (ignore first two)\n";
     }
 
     MPI_Finalize();
