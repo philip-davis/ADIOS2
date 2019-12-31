@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1077,6 +1078,10 @@ static int DoPushWait(CP_Services Svcs, Rdma_RS_Stream Stream,
                           "got completion for Rank %d, push request %d.\n",
                           WRank, WRidx);
             RankLog = &StepLog->RankLog[WRank];
+            Svcs->verbose(Stream->CP_Stream,
+                          "CQEntry.data = %" PRIu64
+                          ", BufferSlot = %d, WRank = %d, WRidx = %d\n",
+                          CQEntry.data, BufferSlot, WRank, WRidx);
             Handle_t = (RdmaCompletionHandle) &
                        ((RankLog->PreloadHandles[BufferSlot])[WRidx]);
             if (Handle_t)
@@ -1173,7 +1178,7 @@ static int RdmaWaitForCompletion(CP_Services Svcs, void *Handle_v)
     RdmaCompletionHandle Handle = (RdmaCompletionHandle)Handle_v;
     Rdma_RS_Stream Stream = Handle->CPStream;
 
-    // fprintf(stderr, "Rank %d, %s\n", Stream->Rank, __func__);
+    Svcs->verbose(Stream->CP_Stream, "Rank %d, %s\n", Stream->Rank, __func__);
 
     if (Stream->PreloadPosted && Handle->PreloadBuffer)
     {
@@ -1593,6 +1598,11 @@ static void PushData(CP_Services Svcs, Rdma_WSR_Stream Stream,
             // TODO: this can only handle 4096 requests per reader rank. Fix.
             uint64_t Data = ((uint64_t)i << 20) | WS_Stream->Rank;
             Data |= BufferSlot << 31;
+            Data &= 0xFFFFFFFF;
+            Svcs->verbose(WS_Stream->CP_Stream,
+                          "Sending Data = %" PRIu64
+                          " ; BufferSlot = %d, Rank = %d, Entry = %d\n",
+                          Data, BufferSlot, WS_Stream->Rank, i);
             Req = &RankReq->ReqLog[i];
             // fprintf(stderr,
             //         "StepBuffer = %p, Req->Offset = %li, Req->BufferLen =
@@ -1680,7 +1690,7 @@ static void PostPreload(CP_Services Svcs, Rdma_RS_Stream Stream, long Timestep)
     int rc;
     int i, j;
 
-    // fprintf(stderr, "rank %d: %s\n", Stream->Rank, __func__);
+    Svcs->verbose(Stream->CP_Stream, "rank %d: %s\n", Stream->Rank, __func__);
 
     StepLog = Stream->StepLog;
     while (StepLog)
