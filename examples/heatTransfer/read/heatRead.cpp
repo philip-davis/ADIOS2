@@ -75,8 +75,8 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &wnproc);
 
     const unsigned int color = 2;
-    MPI_Comm mpiReaderComm = MPI_COMM_WORLD;
-    // MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiReaderComm);
+    MPI_Comm mpiReaderComm;
+    MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiReaderComm);
 
     int rank, nproc;
     MPI_Comm_rank(mpiReaderComm, &rank);

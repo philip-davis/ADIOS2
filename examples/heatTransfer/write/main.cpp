@@ -49,8 +49,8 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &wrank);
     MPI_Comm_size(MPI_COMM_WORLD, &wnproc);
     const unsigned int color = 1;
-    MPI_Comm mpiHeatTransferComm = MPI_COMM_WORLD;
-    // MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiHeatTransferComm);
+    MPI_Comm mpiHeatTransferComm;
+    MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &mpiHeatTransferComm);
 
     int rank, nproc;
     MPI_Comm_rank(mpiHeatTransferComm, &rank);
