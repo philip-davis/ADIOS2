@@ -170,6 +170,7 @@ static void init_fabric(struct fabric_state *fabric, struct _SstParams *Params)
         return;
     }
 
+    // TODO: either fix FI_CONTEXT support, or remove it.
     if (info->mode & FI_CONTEXT2)
     {
         fabric->ctx = calloc(2, sizeof(*fabric->ctx));
