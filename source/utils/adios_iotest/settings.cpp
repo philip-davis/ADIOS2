@@ -91,6 +91,8 @@ int Settings::processArgs(int argc, char *argv[])
             appId = stringToNumber("appID", optarg);
             appIdDefined = true;
             break;
+        case 'B':
+        	iolib = IOLib::Blast;
         case 'c':
             configFileName = optarg;
             break;
