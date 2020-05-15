@@ -27,38 +27,14 @@ inline void AssignStep1D(const size_t step, std::vector<T> &vector,
                   [step](T &value) { value = static_cast<T>(step); });
 }
 
-template <>
-void AssignStep1D(const size_t step, std::vector<std::complex<float>> &vector,
+template <typename Float>
+void AssignStep1D(const size_t step, std::vector<std::complex<Float>> &vector,
                   const size_t ghostCells)
 {
     std::for_each(vector.begin() + ghostCells, vector.end() - ghostCells,
-                  [step](std::complex<float> &value) {
-                      value = std::complex<float>(static_cast<float>(step),
-                                                  static_cast<float>(step));
-                  });
-}
-
-template <>
-void AssignStep1D(const size_t step, std::vector<std::complex<double>> &vector,
-                  const size_t ghostCells)
-{
-    std::for_each(vector.begin() + ghostCells, vector.end() - ghostCells,
-                  [step](std::complex<double> &value) {
-                      value = std::complex<double>(static_cast<double>(step),
-                                                   static_cast<double>(step));
-                  });
-}
-
-template <>
-void AssignStep1D(const size_t step,
-                  std::vector<std::complex<long double>> &vector,
-                  const size_t ghostCells)
-{
-    std::for_each(vector.begin() + ghostCells, vector.end() - ghostCells,
-                  [step](std::complex<long double> &value) {
-                      value = std::complex<long double>(
-                          static_cast<long double>(step),
-                          static_cast<long double>(step));
+                  [step](std::complex<Float> &value) {
+                      value = std::complex<Float>(static_cast<Float>(step),
+                                                  static_cast<Float>(step));
                   });
 }
 
@@ -79,8 +55,8 @@ inline void AssignStep2D(const size_t step, std::vector<T> &vector,
     }
 }
 
-template <>
-void AssignStep2D(const size_t step, std::vector<std::complex<float>> &vector,
+template <typename Float>
+void AssignStep2D(const size_t step, std::vector<std::complex<Float>> &vector,
                   const size_t Nx, const size_t Ny, const size_t ghostCellsX,
                   const size_t ghostCellsY)
 {
@@ -91,45 +67,8 @@ void AssignStep2D(const size_t step, std::vector<std::complex<float>> &vector,
         for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
         {
             const size_t index = indexJ + i;
-            vector[index] = std::complex<float>(static_cast<float>(step),
-                                                static_cast<float>(step));
-        }
-    }
-}
-
-template <>
-void AssignStep2D(const size_t step, std::vector<std::complex<double>> &vector,
-                  const size_t Nx, const size_t Ny, const size_t ghostCellsX,
-                  const size_t ghostCellsY)
-{
-    for (size_t j = ghostCellsY; j < Ny + ghostCellsY; ++j)
-    {
-        const size_t indexJ = j * (Nx + 2 * ghostCellsX);
-
-        for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
-        {
-            const size_t index = indexJ + i;
-            vector[index] = std::complex<double>(static_cast<double>(step),
-                                                 static_cast<double>(step));
-        }
-    }
-}
-
-template <>
-void AssignStep2D(const size_t step,
-                  std::vector<std::complex<long double>> &vector,
-                  const size_t Nx, const size_t Ny, const size_t ghostCellsX,
-                  const size_t ghostCellsY)
-{
-    for (size_t j = ghostCellsY; j < Ny + ghostCellsY; ++j)
-    {
-        const size_t indexJ = j * (Nx + 2 * ghostCellsX);
-
-        for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
-        {
-            const size_t index = indexJ + i;
-            vector[index] = std::complex<long double>(
-                static_cast<long double>(step), static_cast<long double>(step));
+            vector[index] = std::complex<Float>(static_cast<Float>(step),
+                                                static_cast<Float>(step));
         }
     }
 }
@@ -158,8 +97,8 @@ inline void AssignStep3D(const size_t step, std::vector<T> &vector,
     }
 }
 
-template <>
-void AssignStep3D(const size_t step, std::vector<std::complex<float>> &vector,
+template <typename Float>
+void AssignStep3D(const size_t step, std::vector<std::complex<Float>> &vector,
                   const size_t Nx, const size_t Ny, const size_t Nz,
                   const size_t ghostCellsX, const size_t ghostCellsY,
                   const size_t ghostCellsZ)
@@ -176,60 +115,8 @@ void AssignStep3D(const size_t step, std::vector<std::complex<float>> &vector,
             for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
             {
                 const size_t index = indexK + indexJ + i;
-                vector[index] = std::complex<float>(static_cast<float>(step),
-                                                    static_cast<float>(step));
-            }
-        }
-    }
-}
-
-template <>
-void AssignStep3D(const size_t step, std::vector<std::complex<double>> &vector,
-                  const size_t Nx, const size_t Ny, const size_t Nz,
-                  const size_t ghostCellsX, const size_t ghostCellsY,
-                  const size_t ghostCellsZ)
-{
-    for (size_t k = ghostCellsZ; k < Nz + ghostCellsZ; ++k)
-    {
-        const size_t indexK =
-            k * (Ny + 2 * ghostCellsY) * (Nx + 2 * ghostCellsX);
-
-        for (size_t j = ghostCellsY; j < Ny + ghostCellsY; ++j)
-        {
-            const size_t indexJ = j * (Nx + 2 * ghostCellsX);
-
-            for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
-            {
-                const size_t index = indexK + indexJ + i;
-                vector[index] = std::complex<double>(static_cast<double>(step),
-                                                     static_cast<double>(step));
-            }
-        }
-    }
-}
-
-template <>
-void AssignStep3D(const size_t step,
-                  std::vector<std::complex<long double>> &vector,
-                  const size_t Nx, const size_t Ny, const size_t Nz,
-                  const size_t ghostCellsX, const size_t ghostCellsY,
-                  const size_t ghostCellsZ)
-{
-    for (size_t k = ghostCellsZ; k < Nz + ghostCellsZ; ++k)
-    {
-        const size_t indexK =
-            k * (Ny + 2 * ghostCellsY) * (Nx + 2 * ghostCellsX);
-
-        for (size_t j = ghostCellsY; j < Ny + ghostCellsY; ++j)
-        {
-            const size_t indexJ = j * (Nx + 2 * ghostCellsX);
-
-            for (size_t i = ghostCellsX; i < Nx + ghostCellsX; ++i)
-            {
-                const size_t index = indexK + indexJ + i;
-                vector[index] =
-                    std::complex<long double>(static_cast<long double>(step),
-                                              static_cast<long double>(step));
+                vector[index] = std::complex<Float>(static_cast<Float>(step),
+                                                    static_cast<Float>(step));
             }
         }
     }
@@ -249,15 +136,15 @@ void HDF5Steps1D(const size_t ghostCells)
     // Number of steps
     const size_t NSteps = 3;
 
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
 #endif
 
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#ifdef TEST_HDF5_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("WriteIO");
@@ -331,7 +218,7 @@ void HDF5Steps1D(const size_t ghostCells)
         }
         h5Writer.Close();
     }
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
     // Reader
@@ -485,15 +372,15 @@ void HDF5Steps2D4x2(const size_t ghostCells)
     // Number of steps
     const size_t NSteps = 3;
 
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
 #endif
 
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#ifdef TEST_HDF5_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("WriteIO");
@@ -567,7 +454,7 @@ void HDF5Steps2D4x2(const size_t ghostCells)
         }
         h5Writer.Close();
     }
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
     // Reader
@@ -733,15 +620,15 @@ void HDF5Steps3D8x2x4(const size_t ghostCells)
     // Number of steps
     const size_t NSteps = 3;
 
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
 #endif
 
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#ifdef TEST_HDF5_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("WriteIO");
@@ -825,7 +712,7 @@ void HDF5Steps3D8x2x4(const size_t ghostCells)
         }
         h5Writer.Close();
     }
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
     // Reader
@@ -1042,7 +929,7 @@ INSTANTIATE_TEST_CASE_P(ghostCells, HDF5WriteMemSelReadVector,
 
 int main(int argc, char **argv)
 {
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Init(nullptr, nullptr);
 #endif
 
@@ -1058,7 +945,7 @@ int main(int argc, char **argv)
 
     result = RUN_ALL_TESTS();
 
-#ifdef ADIOS2_HAVE_MPI
+#ifdef TEST_HDF5_MPI
     MPI_Finalize();
 #endif
 

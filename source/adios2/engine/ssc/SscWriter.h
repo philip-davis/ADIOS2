@@ -13,6 +13,7 @@
 
 #include "SscHelper.h"
 #include "adios2/core/Engine.h"
+#include "adios2/helper/adiosMpiHandshake.h"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
 #include <mpi.h>
 #include <queue>
@@ -50,22 +51,25 @@ private:
     ssc::RankPosMap m_AllSendingReaderRanks;
     std::vector<char> m_Buffer;
     MPI_Win m_MpiWin;
+    MPI_Group m_MpiAllReadersGroup;
+    MPI_Comm m_StreamComm;
+    std::string m_MpiMode = "twosided";
 
-    int m_WorldRank;
-    int m_WorldSize;
+    int m_StreamRank;
+    int m_StreamSize;
     int m_WriterRank;
     int m_WriterSize;
-    int m_ReaderSize;
-    int m_WriterMasterWorldRank;
-    int m_ReaderMasterWorldRank;
-    int m_AppID = 0;
-    int m_AppSize = 0;
-    std::vector<std::vector<int>> m_WriterGlobalMpiInfo;
-    std::vector<std::vector<int>> m_ReaderGlobalMpiInfo;
+
+    helper::MpiHandshake m_MpiHandshake;
 
     void SyncMpiPattern();
     void SyncWritePattern();
     void SyncReadPattern();
+    void PutOneSidedFencePush();
+    void PutOneSidedPostPush();
+    void PutOneSidedFencePull();
+    void PutOneSidedPostPull();
+    void PutTwoSided();
 
 #define declare_type(T)                                                        \
     void DoPutSync(Variable<T> &, const T *) final;                            \
@@ -78,14 +82,15 @@ private:
     template <class T>
     void PutDeferredCommon(Variable<T> &variable, const T *values);
 
-    template <class T>
-    bool HasBlock(const Variable<T> &variable);
-
     void CalculatePosition(ssc::BlockVecVec &writerMapVec,
                            ssc::BlockVecVec &readerMapVec, const int writerRank,
                            ssc::RankPosMap &allOverlapRanks);
 
     int m_Verbosity = 0;
+    int m_MaxFilenameLength = 128;
+    int m_MaxStreamsPerApp = 1;
+    int m_RendezvousAppCount = 2;
+    int m_OpenTimeoutSecs = 10;
 };
 
 } // end namespace engine

@@ -19,12 +19,6 @@
 #include "adios2/helper/adiosFunctions.h"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
 
-#ifdef ADIOS2_HAVE_MPI
-#include "adios2/helper/adiosCommMPI.h"
-#else
-#include "adios2/toolkit/sst/mpiwrap.h"
-#endif
-
 namespace adios2
 {
 namespace core
@@ -41,15 +35,10 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
 
     Init();
 
-    m_Input = SstReaderOpen(cstr, &Params,
-#ifdef ADIOS2_HAVE_MPI
-                            CommAsMPI(m_Comm)
-#else
-                            MPI_COMM_NULL
-#endif
-    );
+    m_Input = SstReaderOpen(cstr, &Params, &m_Comm);
     if (!m_Input)
     {
+        delete[] cstr;
         throw std::runtime_error(
             "ERROR: SstReader did not find active "
             "Writer contact info in file \"" +
@@ -266,7 +255,6 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
         break;
     }
     m_IO.RemoveAllVariables();
-    m_IO.RemoveAllAttributes();
     result = SstAdvanceStep(m_Input, timeout_sec);
     if (result == SstEndOfStream)
     {
@@ -323,9 +311,9 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
         //   whatever transport it is using.  But it is opaque to the Engine
         //   (and to the control plane).)
 
-        m_BP3Deserializer = new format::BP3Deserializer(m_Comm, m_DebugMode);
+        m_BP3Deserializer = new format::BP3Deserializer(m_Comm);
         m_BP3Deserializer->Init(m_IO.m_Parameters,
-                                "in call to BP3::Open for reading");
+                                "in call to BP3::Open for reading", "sst");
 
         m_BP3Deserializer->m_Metadata.Resize(
             (*m_CurrentStepMetaData->WriterMetadata)->DataSize,
@@ -359,6 +347,11 @@ size_t SstReader::CurrentStep() const { return SstCurrentStep(m_Input); }
 
 void SstReader::EndStep()
 {
+    if (!m_BetweenStepPairs)
+    {
+        throw std::logic_error(
+            "ERROR: EndStep() is called without a successful BeginStep()");
+    }
     m_BetweenStepPairs = false;
     TAU_SCOPED_TIMER_FUNC();
     if (m_ReaderSelectionsLocked && !m_DefinitionsNotified)
@@ -535,6 +528,10 @@ void SstReader::PerformGets()
     }
     else if (m_WriterMarshalMethod == SstMarshalBP)
     {
+        std::vector<void *> sstReadHandlers;
+        std::vector<std::vector<char>> buffers;
+        size_t iter = 0;
+
         if (m_BP3Deserializer->m_DeferredVariables.empty())
         {
             return;
@@ -556,7 +553,34 @@ void SstReader::PerformGets()
         {                                                                      \
             m_BP3Deserializer->SetVariableBlockInfo(variable, blockInfo);      \
         }                                                                      \
-        ReadVariableBlocks(variable);                                          \
+        ReadVariableBlocksRequests(variable, sstReadHandlers, buffers);        \
+    }
+            ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+        }
+        // wait for all SstRead requests to finish
+        for (const auto &i : sstReadHandlers)
+        {
+            if (SstWaitForCompletion(m_Input, i) != SstSuccess)
+            {
+                throw std::runtime_error(
+                    "ERROR:  Writer failed before returning data");
+            }
+        }
+
+        for (const std::string &name : m_BP3Deserializer->m_DeferredVariables)
+        {
+            const std::string type = m_IO.InquireVariableType(name);
+
+            if (type == "compound")
+            {
+            }
+#define declare_type(T)                                                        \
+    else if (type == helper::GetType<T>())                                     \
+    {                                                                          \
+        Variable<T> &variable =                                                \
+            FindVariable<T>(name, "in call to PerformGets, EndStep or Close"); \
+        ReadVariableBlocksFill(variable, buffers, iter);                       \
         variable.m_BlocksInfo.clear();                                         \
     }
             ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)

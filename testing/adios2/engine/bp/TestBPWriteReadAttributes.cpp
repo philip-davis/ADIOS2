@@ -55,10 +55,10 @@ TEST_F(BPWriteReadAttributes, WriteReadSingleTypes)
         generateNewSmallTestData(m_TestData, 0, 0, 0);
 
 // Write test data using BP
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");
@@ -237,7 +237,7 @@ TEST_F(BPWriteReadAttributes, WriteReadArrayTypes)
     const std::string fName = "foo" + std::string(&adios2::PathSeparator, 1) +
                               "WriteAttributeReadArrayTypes.bp";
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     int mpiRank = 0, mpiSize = 1;
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
@@ -266,10 +266,10 @@ TEST_F(BPWriteReadAttributes, WriteReadArrayTypes)
         generateNewSmallTestData(m_TestData, 0, 0, 0);
 
 // Write test data using BP
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");
@@ -485,10 +485,10 @@ TEST_F(BPWriteReadAttributes, BPWriteReadSingleTypesVar)
     const std::string separator = "/";
 
 // Write test data using BP
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");
@@ -670,7 +670,7 @@ TEST_F(BPWriteReadAttributes, WriteReadArrayTypesVar)
     const std::string fName = "foo" + std::string(&adios2::PathSeparator, 1) +
                               "BPWriteAttributeReadArrayTypesVar.bp";
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     int mpiRank = 0, mpiSize = 1;
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
@@ -698,10 +698,10 @@ TEST_F(BPWriteReadAttributes, WriteReadArrayTypesVar)
         generateNewSmallTestData(m_TestData, 0, 0, 0);
 
 // Write test data using BP
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("TestIO");
@@ -909,7 +909,7 @@ TEST_F(BPWriteReadAttributes, WriteReadStreamVar)
     // Number of steps
     const size_t NSteps = 3;
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
 #endif
@@ -918,10 +918,10 @@ TEST_F(BPWriteReadAttributes, WriteReadStreamVar)
         generateNewSmallTestData(m_TestData, 0, 0, 0);
 
 // Write test data using BP
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         const adios2::Dims shape{static_cast<size_t>(Nx * mpiSize)};
@@ -1049,7 +1049,7 @@ TEST_F(BPWriteReadAttributes, WriteReadStreamVar)
 
 int main(int argc, char **argv)
 {
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     MPI_Init(nullptr, nullptr);
 #endif
 
@@ -1062,7 +1062,7 @@ int main(int argc, char **argv)
     }
     result = RUN_ALL_TESTS();
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     MPI_Finalize();
 #endif
 

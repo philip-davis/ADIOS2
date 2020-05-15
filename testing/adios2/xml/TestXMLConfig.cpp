@@ -27,10 +27,10 @@ TEST_F(XMLConfigTest, TwoIOs)
     const std::string configFile(
         configDir + std::string(&adios2::PathSeparator, 1) + "config1.xml");
 
-#ifdef ADIOS2_HAVE_MPI
-    adios2::ADIOS adios(configFile, MPI_COMM_WORLD, adios2::DebugON);
+#if ADIOS2_USE_MPI
+    adios2::ADIOS adios(configFile, MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(configFile, adios2::DebugON);
+    adios2::ADIOS adios(configFile);
 #endif
 
     // must be declared at least once
@@ -72,13 +72,11 @@ TEST_F(XMLConfigTest, TwoEnginesException)
     const std::string configFile(
         configDir + std::string(&adios2::PathSeparator, 1) + "config2.xml");
 
-#ifdef ADIOS2_HAVE_MPI
-    EXPECT_THROW(
-        adios2::ADIOS adios(configFile, MPI_COMM_WORLD, adios2::DebugON),
-        std::invalid_argument);
-#else
-    EXPECT_THROW(adios2::ADIOS adios(configFile, adios2::DebugON),
+#if ADIOS2_USE_MPI
+    EXPECT_THROW(adios2::ADIOS adios(configFile, MPI_COMM_WORLD),
                  std::invalid_argument);
+#else
+    EXPECT_THROW(adios2::ADIOS adios(configFile), std::invalid_argument);
 #endif
 }
 
@@ -88,18 +86,16 @@ TEST_F(XMLConfigTest, OpTypeException)
                                  std::string(&adios2::PathSeparator, 1) +
                                  "configOpTypeException.xml");
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     if (rank == 0)
     {
-        EXPECT_THROW(
-            adios2::ADIOS adios(configFile, MPI_COMM_SELF, adios2::DebugON),
-            std::invalid_argument);
+        EXPECT_THROW(adios2::ADIOS adios(configFile, MPI_COMM_SELF),
+                     std::invalid_argument);
     }
 #else
-    EXPECT_THROW(adios2::ADIOS adios(configFile, adios2::DebugON),
-                 std::invalid_argument);
+    EXPECT_THROW(adios2::ADIOS adios(configFile), std::invalid_argument);
 #endif
 }
 
@@ -109,13 +105,11 @@ TEST_F(XMLConfigTest, OpNullException)
                                  std::string(&adios2::PathSeparator, 1) +
                                  "configOpNullException.xml");
 
-#ifdef ADIOS2_HAVE_MPI
-    EXPECT_THROW(
-        adios2::ADIOS adios(configFile, MPI_COMM_WORLD, adios2::DebugON),
-        std::invalid_argument);
-#else
-    EXPECT_THROW(adios2::ADIOS adios(configFile, adios2::DebugON),
+#if ADIOS2_USE_MPI
+    EXPECT_THROW(adios2::ADIOS adios(configFile, MPI_COMM_WORLD),
                  std::invalid_argument);
+#else
+    EXPECT_THROW(adios2::ADIOS adios(configFile), std::invalid_argument);
 #endif
 }
 
@@ -125,19 +119,17 @@ TEST_F(XMLConfigTest, OpNoneException)
                                  std::string(&adios2::PathSeparator, 1) +
                                  "configOpNoneException.xml");
 
-#ifdef ADIOS2_HAVE_MPI
-    EXPECT_THROW(
-        adios2::ADIOS adios(configFile, MPI_COMM_WORLD, adios2::DebugON),
-        std::invalid_argument);
-#else
-    EXPECT_THROW(adios2::ADIOS adios(configFile, adios2::DebugON),
+#if ADIOS2_USE_MPI
+    EXPECT_THROW(adios2::ADIOS adios(configFile, MPI_COMM_WORLD),
                  std::invalid_argument);
+#else
+    EXPECT_THROW(adios2::ADIOS adios(configFile), std::invalid_argument);
 #endif
 }
 
 int main(int argc, char **argv)
 {
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     MPI_Init(&argc, &argv);
 #endif
 
@@ -145,7 +137,7 @@ int main(int argc, char **argv)
     ::testing::InitGoogleTest(&argc, argv);
     result = RUN_ALL_TESTS();
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     MPI_Finalize();
 #endif
 

@@ -9,6 +9,7 @@
  */
 
 #include "DataManReader.tcc"
+#include "adios2/helper/adiosString.h"
 
 namespace adios2
 {
@@ -17,68 +18,93 @@ namespace core
 namespace engine
 {
 
-DataManReader::DataManReader(IO &io, const std::string &name, const Mode mode,
-                             helper::Comm comm)
-: DataManCommon("DataManReader", io, name, mode, std::move(comm))
+DataManReader::DataManReader(IO &io, const std::string &name,
+                             const Mode openMode, helper::Comm comm)
+: Engine("DataManReader", io, name, openMode, std::move(comm)),
+  m_Serializer(m_Comm, helper::IsRowMajor(io.m_HostLanguage))
 {
-    GetParameter(m_IO.m_Parameters, "AlwaysProvideLatestTimestep",
-                 m_ProvideLatest);
+    m_MpiRank = m_Comm.Rank();
+    m_MpiSize = m_Comm.Size();
+    helper::GetParameter(m_IO.m_Parameters, "IPAddress", m_IPAddress);
+    helper::GetParameter(m_IO.m_Parameters, "Port", m_Port);
+    helper::GetParameter(m_IO.m_Parameters, "Timeout", m_Timeout);
+    helper::GetParameter(m_IO.m_Parameters, "Verbose", m_Verbosity);
+    helper::GetParameter(m_IO.m_Parameters, "DoubleBuffer", m_DoubleBuffer);
+    helper::GetParameter(m_IO.m_Parameters, "TransportMode", m_TransportMode);
 
-    m_ZmqRequester.OpenRequester(m_Timeout, m_ReceiverBufferSize);
+    m_Requesters.emplace_back();
+    m_Requesters[0].OpenRequester(m_Timeout, m_ReceiverBufferSize);
 
-    if (m_OneToOneMode)
+    if (m_IPAddress.empty())
     {
-        m_ControlAddresses.push_back("tcp://" + m_IPAddress + ":" +
-                                     std::to_string(m_Port));
-        m_DataAddresses.push_back("tcp://" + m_IPAddress + ":" +
-                                  std::to_string(m_Port + m_MpiSize));
+        throw(std::invalid_argument(
+            "IP address not specified in wide area staging"));
+    }
+    std::string address = "tcp://" + m_IPAddress + ":" + std::to_string(m_Port);
+    std::string request = "Address";
+
+    auto reply =
+        m_Requesters[0].Request(request.data(), request.size(), address);
+
+    auto start_time = std::chrono::system_clock::now();
+    while (reply == nullptr or reply->empty())
+    {
+        reply =
+            m_Requesters[0].Request(request.data(), request.size(), address);
+        auto now_time = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+            now_time - start_time);
+        if (duration.count() > m_Timeout)
+        {
+            m_InitFailed = true;
+            return;
+        }
+    }
+    auto addJson = nlohmann::json::parse(*reply);
+    m_PublisherAddresses =
+        addJson["PublisherAddresses"].get<std::vector<std::string>>();
+    m_ReplierAddresses =
+        addJson["ReplierAddresses"].get<std::vector<std::string>>();
+
+    if (m_TransportMode == "fast")
+    {
+        for (const auto &address : m_PublisherAddresses)
+        {
+            m_Subscribers.emplace_back();
+            m_Subscribers.back().OpenSubscriber(address, m_ReceiverBufferSize);
+            m_SubscriberThreads.emplace_back(
+                std::thread(&DataManReader::SubscribeThread, this,
+                            std::ref(m_Subscribers.back())));
+        }
+    }
+    else if (m_TransportMode == "reliable")
+    {
+        m_Requesters.clear();
+        for (const auto &address : m_ReplierAddresses)
+        {
+            m_Requesters.emplace_back();
+            m_Requesters.back().OpenRequester(address, m_Timeout,
+                                              m_ReceiverBufferSize);
+        }
     }
     else
     {
-        if (m_IPAddress.empty())
-        {
-            throw(std::invalid_argument(
-                "IP address not specified in wide area staging"));
-        }
-        std::string address =
-            "tcp://" + m_IPAddress + ":" + std::to_string(m_Port);
-        std::string request = "Address";
-        auto reply =
-            m_ZmqRequester.Request(request.data(), request.size(), address);
-        auto start_time = std::chrono::system_clock::now();
-        while (reply == nullptr or reply->empty())
-        {
-            reply =
-                m_ZmqRequester.Request(request.data(), request.size(), address);
-            auto now_time = std::chrono::system_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-                now_time - start_time);
-            if (duration.count() > m_Timeout)
-            {
-                m_InitFailed = true;
-                return;
-            }
-        }
-        auto addJson = nlohmann::json::parse(*reply);
-        m_DataAddresses =
-            addJson["DataAddresses"].get<std::vector<std::string>>();
-        m_ControlAddresses =
-            addJson["ControlAddresses"].get<std::vector<std::string>>();
-        m_TotalWriters = m_DataAddresses.size();
+        throw(std::invalid_argument("unknown transport mode"));
     }
 
-    for (const auto &address : m_DataAddresses)
+    for (auto &requester : m_Requesters)
     {
-        auto dataZmq = std::make_shared<adios2::zmq::ZmqPubSub>();
-        dataZmq->OpenSubscriber(address, m_Timeout, m_ReceiverBufferSize);
-        m_ZmqSubscriberVec.push_back(dataZmq);
+        requester.Request("Ready", 5, address);
     }
-    m_SubscriberThread = std::thread(&DataManReader::SubscriberThread, this);
 
-    if (m_Verbosity >= 5)
+    if (m_TransportMode == "reliable")
     {
-        std::cout << "DataManReader::DataManReader() Rank " << m_MpiRank
-                  << std::endl;
+        for (const auto &address : m_ReplierAddresses)
+        {
+            m_RequesterThreads.emplace_back(
+                std::thread(&DataManReader::RequestThread, this,
+                            std::ref(m_Requesters.back())));
+        }
     }
 }
 
@@ -136,8 +162,8 @@ StepStatus DataManReader::BeginStep(StepMode stepMode,
         return StepStatus::EndOfStream;
     }
 
-    m_CurrentStepMetadata = m_FastSerializer.GetEarliestLatestStep(
-        m_CurrentStep, m_TotalWriters, timeout, m_ProvideLatest);
+    m_CurrentStepMetadata = m_Serializer.GetEarliestLatestStep(
+        m_CurrentStep, m_PublisherAddresses.size(), timeout, true);
 
     if (m_CurrentStepMetadata == nullptr)
     {
@@ -151,7 +177,7 @@ StepStatus DataManReader::BeginStep(StepMode stepMode,
         return StepStatus::EndOfStream;
     }
 
-    m_FastSerializer.GetAttributes(m_IO);
+    m_Serializer.GetAttributes(m_IO);
 
     for (const auto &i : *m_CurrentStepMetadata)
     {
@@ -187,42 +213,58 @@ void DataManReader::PerformGets() {}
 
 void DataManReader::EndStep()
 {
-    m_FastSerializer.Erase(m_CurrentStep, true);
+    m_Serializer.Erase(m_CurrentStep, true);
     m_CurrentStepMetadata = nullptr;
-    if (m_Verbosity >= 5)
-    {
-        std::cout << "DataManReader::EndStep() Current step " << m_CurrentStep
-                  << std::endl;
-    }
 }
 
 void DataManReader::Flush(const int transportIndex) {}
 
 // PRIVATE
 
-void DataManReader::SubscriberThread()
+void DataManReader::RequestThread(zmq::ZmqReqRep &requester)
 {
-    while (m_ThreadActive)
+    while (m_RequesterThreadActive)
     {
-        for (auto &z : m_ZmqSubscriberVec)
+        auto buffer = requester.Request("Step", 4);
+        if (buffer != nullptr && buffer->size() > 0)
         {
-            auto buffer = z->PopBufferQueue();
-            if (buffer != nullptr && buffer->size() > 0)
+            if (buffer->size() < 64)
             {
-                if (buffer->size() < 64)
+                try
                 {
-                    try
-                    {
-                        auto jmsg = nlohmann::json::parse(buffer->data());
-                        m_FinalStep = jmsg["FinalStep"].get<size_t>();
-                        continue;
-                    }
-                    catch (...)
-                    {
-                    }
+                    auto jmsg = nlohmann::json::parse(buffer->data());
+                    m_FinalStep = jmsg["FinalStep"].get<size_t>();
+                    continue;
                 }
-                m_FastSerializer.PutPack(buffer);
+                catch (...)
+                {
+                }
             }
+            m_Serializer.PutPack(buffer, m_DoubleBuffer);
+        }
+    }
+}
+
+void DataManReader::SubscribeThread(zmq::ZmqPubSub &subscriber)
+{
+    while (m_SubscriberThreadActive)
+    {
+        auto buffer = subscriber.Receive();
+        if (buffer != nullptr && buffer->size() > 0)
+        {
+            if (buffer->size() < 64)
+            {
+                try
+                {
+                    auto jmsg = nlohmann::json::parse(buffer->data());
+                    m_FinalStep = jmsg["FinalStep"].get<size_t>();
+                    continue;
+                }
+                catch (...)
+                {
+                }
+            }
+            m_Serializer.PutPack(buffer, m_DoubleBuffer);
         }
     }
 }
@@ -251,16 +293,23 @@ ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 
 void DataManReader::DoClose(const int transportIndex)
 {
-    m_ThreadActive = false;
-    if (m_SubscriberThread.joinable())
+    m_SubscriberThreadActive = false;
+    m_RequesterThreadActive = false;
+    for (auto &t : m_SubscriberThreads)
     {
-        m_SubscriberThread.join();
+        if (t.joinable())
+        {
+            t.join();
+        }
     }
-    if (m_Verbosity >= 5)
+    for (auto &t : m_RequesterThreads)
     {
-        std::cout << "DataManReader::DoClose() Rank " << m_MpiRank << ", Step "
-                  << m_CurrentStep << std::endl;
+        if (t.joinable())
+        {
+            t.join();
+        }
     }
+    m_IsClosed = true;
 }
 
 } // end namespace engine

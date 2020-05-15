@@ -16,7 +16,7 @@
 #include "Operator.h"
 #include "Variable.h"
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
 #include <mpi.h>
 #endif
 
@@ -174,7 +174,7 @@ public:
      * used if variableName is empty.
      * @return object reference to internal Attribute in IO
      * @exception std::invalid_argument if Attribute with unique name (in IO or
-     * Variable) is already defined, in debug mode only
+     * Variable) is already defined
      */
     template <class T>
     Attribute<T> DefineAttribute(const std::string &name, const T *data,
@@ -194,7 +194,7 @@ public:
      * used if variableName is empty.
      * @return object reference to internal Attribute in IO
      * @exception std::invalid_argument if Attribute with unique name (in IO or
-     * Variable) is already defined, in debug mode only
+     * Variable) is already defined
      */
     template <class T>
     Attribute<T> DefineAttribute(const std::string &name, const T &value,
@@ -250,8 +250,6 @@ public:
 
     /**
      * Open an Engine to start heavy-weight input/output operations.
-     * This version reuses the ADIOS object communicator
-     * MPI Collective function as it calls MPI_Comm_dup
      * @param name unique engine identifier
      * @param mode adios2::Mode::Write, adios2::Mode::Read, or
      *             adios2::Mode::Append (not yet support)
@@ -259,7 +257,7 @@ public:
      */
     Engine Open(const std::string &name, const Mode mode);
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     /**
      * Open an Engine to start heavy-weight input/output operations.
      * This version allows passing a MPI communicator different from the one

@@ -53,9 +53,6 @@ public:
     /** unique identifier */
     const std::string m_Name;
 
-    /** true: extra exceptions checks */
-    const bool m_DebugMode = false;
-
     /** from ADIOS class passed to Engine created with Open */
     const std::string m_HostLanguage = "C++";
 
@@ -122,10 +119,9 @@ public:
      * @param name unique identifier for this IO object
      * @param inConfigFile IO defined in config file (XML)
      * @param hostLanguage current language using the adios2 library
-     * @param debugMode true: extra exception checks (recommended)
      */
     IO(ADIOS &adios, const std::string name, const bool inConfigFile,
-       const std::string hostLanguage, const bool debugMode);
+       const std::string hostLanguage);
 
     ~IO() = default;
 
@@ -200,7 +196,7 @@ public:
      * change over time
      * @return reference to Variable object
      * @exception std::invalid_argument if Variable with unique name is already
-     * defined, in debug mode only
+     * defined
      */
     template <class T>
     Variable<T> &
@@ -216,7 +212,7 @@ public:
      * @param variableName optionally associates the attribute to a Variable
      * @return reference to internal Attribute
      * @exception std::invalid_argument if Attribute with unique name is already
-     * defined, in debug mode only
+     * defined
      */
     template <class T>
     Attribute<T> &DefineAttribute(const std::string &name, const T *array,
@@ -230,7 +226,7 @@ public:
      * @param value single data value
      * @return reference to internal Attribute
      * @exception std::invalid_argument if Attribute with unique name is already
-     * defined, in debug mode only
+     * defined
      */
     template <class T>
     Attribute<T> &DefineAttribute(const std::string &name, const T &value,
@@ -273,11 +269,16 @@ public:
 
     /**
      * @brief Retrieve map with variables info. Use when reading.
+     * @param keys list of variable information keys to be extracted (case
+     * insensitive). Leave empty to return all possible keys.
+     * Possible values:
+     * keys=['AvailableStepsCount','Type','Max','Min','SingleValue','Shape']
      * @return map with current variables and info
      * keys: Type, Min, Max, Value, AvailableStepsStart,
      * AvailableStepsCount, Shape, Start, Count, SingleValue
      */
-    std::map<std::string, Params> GetAvailableVariables() noexcept;
+    std::map<std::string, Params> GetAvailableVariables(
+        const std::set<std::string> &keys = std::set<std::string>()) noexcept;
 
     /**
      * @brief Gets an existing variable of primitive type by name
@@ -393,7 +394,7 @@ public:
      * @param mpiComm assigns a new communicator to the Engine
      * @return a reference to a derived object of the Engine class
      * @exception std::invalid_argument if Engine with unique name is already
-     * created with another Open, in debug mode only
+     * created with another Open
      */
     Engine &Open(const std::string &name, const Mode mode, helper::Comm comm);
 
@@ -405,7 +406,7 @@ public:
      * @param mode write, read, append from ADIOSTypes.h OpenMode
      * @return a reference to a derived object of the Engine class
      * @exception std::invalid_argument if Engine with unique name is already
-     * created with another Open, in debug mode only
+     * created with another Open
      */
     Engine &Open(const std::string &name, const Mode mode);
 
@@ -548,6 +549,10 @@ private:
     template <class T>
     bool IsAvailableStep(const size_t step,
                          const unsigned int variableIndex) noexcept;
+
+    template <class T>
+    Params GetVariableInfo(const std::string &variableName,
+                           const std::set<std::string> &keys);
 };
 
 // Explicit declaration of the public template methods

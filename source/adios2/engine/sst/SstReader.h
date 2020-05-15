@@ -36,7 +36,6 @@ public:
      * @param accessMode
      * @param comm
      * @param method
-     * @param debugMode
      * @param nthreads
      */
     SstReader(IO &io, const std::string &name, const Mode mode,
@@ -53,7 +52,14 @@ public:
 
 private:
     template <class T>
-    void ReadVariableBlocks(Variable<T> &variable);
+    void ReadVariableBlocksRequests(Variable<T> &variable,
+                                    std::vector<void *> &sstReadHandlers,
+                                    std::vector<std::vector<char>> &buffers);
+
+    template <class T>
+    void ReadVariableBlocksFill(Variable<T> &variable,
+                                std::vector<std::vector<char>> &buffers,
+                                size_t &iter);
 
     template <class T>
     void SstBPPerformGets();

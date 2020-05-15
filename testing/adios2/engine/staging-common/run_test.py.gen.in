@@ -60,11 +60,17 @@ def clean_server_kill(writer):
 
 
 def do_simple_test(writer_cmd, reader_cmd, reader_delay, file_test):
+    my_env = os.environ
+
     return_code = 0
 
+#    if "--lock_geometry" in writer_cmd:
+#        my_env["SstVerbose"] = "1"
+
     print("TestDriver:  Doing simple with file_test = " + str(file_test))
+    sys.stdout.flush()
     if writer_cmd is not None:
-        writer = subprocess.Popen(writer_cmd)
+        writer = subprocess.Popen(writer_cmd, env=my_env)
 
     if file_test:
         if writer_cmd is not None:
@@ -75,7 +81,7 @@ def do_simple_test(writer_cmd, reader_cmd, reader_delay, file_test):
 
     if reader_cmd is not None:
         time.sleep(reader_delay)
-        reader = subprocess.Popen(reader_cmd)
+        reader = subprocess.Popen(reader_cmd, env=my_env)
         reader.wait()
         print("TestDriver: Reader exit status was " +
               str(reader.returncode))
@@ -96,16 +102,19 @@ def do_simple_test(writer_cmd, reader_cmd, reader_delay, file_test):
 
 
 def do_simple_mpmd_test(writer_cmd, reader_cmd):
+    my_env = os.environ
     return_code = 0
 
     mpiexec_cmd = ['@MPIEXEC_EXECUTABLE@']
+
     if '@MPIEXEC_EXTRA_FLAGS@':
         mpiexec_cmd.extend('@MPIEXEC_EXTRA_FLAGS@'.split(';'))
     print("TestDriver:  Doing MPMD simple \n")
     mpmd_cmd = mpiexec_cmd + writer_cmd[len(mpiexec_cmd):] + [":"] + reader_cmd[len(mpiexec_cmd):]
     print("TestDriver: MPMD command line : " + " ".join(mpmd_cmd))
 
-    mpmd = subprocess.Popen(mpmd_cmd)
+    sys.stdout.flush()
+    mpmd = subprocess.Popen(mpmd_cmd, env=my_env)
 
     mpmd.wait()
     print("TestDriver: MPMD exit status was " + str(mpmd.returncode))
@@ -248,6 +257,7 @@ parser.add_argument('--max_readers', '-mr', type=int, default=1)
 parser.add_argument('--duration', type=int, default=60)
 parser.add_argument('--interval', type=int, default=5)
 parser.add_argument('--reader_delay', '-rd', type=int, default=0)
+parser.add_argument('--disable_mpmd', action='store_true')
 parser.add_argument('--test_protocol', '-tp', choices=[
                     'simple', 'kill_readers', 'one_client',
                     'kill_writer'], default='simple')
@@ -331,6 +341,9 @@ if is_file_engine[args.engine.lower()]:
 
 if args.reader_delay != 0:
     print("TestDriver: Reader delay setting MPMD false\n")
+    mpmd_possible = False
+
+if args.disable_mpmd:
     mpmd_possible = False
 
 test_setup(args.filename)

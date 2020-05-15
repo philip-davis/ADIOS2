@@ -13,6 +13,9 @@
 
 #include "cp_internal.h"
 
+char *SSTStreamStatusStr[] = {"NotOpen",    "Opening",    "Established",
+                              "PeerClosed", "PeerFailed", "Closed"};
+
 void CP_validateParams(SstStream Stream, SstParams Params, int Writer)
 {
     if (Params->RendezvousReaderCount >= 0)
@@ -649,7 +652,7 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
 {
     FFSBuffer Buf = create_FFSBuffer();
     int DataSize;
-    int *RecvCounts = NULL;
+    size_t *RecvCounts = NULL;
     char *Buffer;
 
     struct _CP_DP_init_info **Pointers = NULL;
@@ -658,9 +661,10 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
 
     if (Stream->Rank == 0)
     {
-        RecvCounts = malloc(Stream->CohortSize * sizeof(int));
+        RecvCounts = malloc(Stream->CohortSize * sizeof(*RecvCounts));
     }
-    SMPI_Gather(&DataSize, 1, MPI_INT, RecvCounts, 1, MPI_INT, 0,
+    size_t DataSz = DataSize;
+    SMPI_Gather(&DataSz, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T, 0,
                 Stream->mpiComm);
 
     /*
@@ -668,13 +672,13 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
      * and displacements for each rank
      */
 
-    int *Displs = NULL;
+    size_t *Displs = NULL;
     char *RecvBuffer = NULL;
 
     if (Stream->Rank == 0)
     {
         int TotalLen = 0;
-        Displs = malloc(Stream->CohortSize * sizeof(int));
+        Displs = malloc(Stream->CohortSize * sizeof(*Displs));
 
         Displs[0] = 0;
         TotalLen = (RecvCounts[0] + 7) & ~7;
@@ -694,8 +698,8 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
      * can gather the data
      */
 
-    SMPI_Gatherv(Buffer, DataSize, MPI_CHAR, RecvBuffer, RecvCounts, Displs,
-                 MPI_CHAR, 0, Stream->mpiComm);
+    SMPI_Gatherv(Buffer, DataSize, SMPI_CHAR, RecvBuffer, RecvCounts, Displs,
+                 SMPI_CHAR, 0, Stream->mpiComm);
     free_FFSBuffer(Buf);
 
     if (Stream->Rank == 0)
@@ -733,17 +737,17 @@ void *CP_distributeDataFromRankZero(SstStream Stream, void *root_info,
         FFSBuffer Buf = create_FFSBuffer();
         char *tmp =
             FFSencode(Buf, FMFormat_of_original(Type), root_info, &DataSize);
-        SMPI_Bcast(&DataSize, 1, MPI_INT, 0, Stream->mpiComm);
-        SMPI_Bcast(tmp, DataSize, MPI_CHAR, 0, Stream->mpiComm);
+        SMPI_Bcast(&DataSize, 1, SMPI_INT, 0, Stream->mpiComm);
+        SMPI_Bcast(tmp, DataSize, SMPI_CHAR, 0, Stream->mpiComm);
         Buffer = malloc(DataSize);
         memcpy(Buffer, tmp, DataSize);
         free_FFSBuffer(Buf);
     }
     else
     {
-        SMPI_Bcast(&DataSize, 1, MPI_INT, 0, Stream->mpiComm);
+        SMPI_Bcast(&DataSize, 1, SMPI_INT, 0, Stream->mpiComm);
         Buffer = malloc(DataSize);
-        SMPI_Bcast(Buffer, DataSize, MPI_CHAR, 0, Stream->mpiComm);
+        SMPI_Bcast(Buffer, DataSize, SMPI_CHAR, 0, Stream->mpiComm);
     }
 
     FFSContext context = Stream->CPInfo->ffs_c;
@@ -761,16 +765,17 @@ void **CP_consolidateDataToAll(SstStream Stream, void *LocalInfo,
 {
     FFSBuffer Buf = create_FFSBuffer();
     int DataSize;
-    int *RecvCounts;
+    size_t *RecvCounts;
     char *Buffer;
 
     struct _CP_DP_init_info **Pointers = NULL;
 
     Buffer = FFSencode(Buf, FMFormat_of_original(Type), LocalInfo, &DataSize);
 
-    RecvCounts = malloc(Stream->CohortSize * sizeof(int));
+    RecvCounts = malloc(Stream->CohortSize * sizeof(*RecvCounts));
 
-    SMPI_Allgather(&DataSize, 1, MPI_INT, RecvCounts, 1, MPI_INT,
+    size_t DataSz = DataSize;
+    SMPI_Allgather(&DataSz, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T,
                    Stream->mpiComm);
 
     /*
@@ -778,12 +783,12 @@ void **CP_consolidateDataToAll(SstStream Stream, void *LocalInfo,
      * and displacements for each rank
      */
 
-    int *Displs;
+    size_t *Displs;
     char *RecvBuffer = NULL;
     int i;
 
     int TotalLen = 0;
-    Displs = malloc(Stream->CohortSize * sizeof(int));
+    Displs = malloc(Stream->CohortSize * sizeof(*Displs));
 
     Displs[0] = 0;
     TotalLen = (RecvCounts[0] + 7) & ~7;
@@ -802,8 +807,8 @@ void **CP_consolidateDataToAll(SstStream Stream, void *LocalInfo,
      * can gather the data
      */
 
-    SMPI_Allgatherv(Buffer, DataSize, MPI_CHAR, RecvBuffer, RecvCounts, Displs,
-                    MPI_CHAR, Stream->mpiComm);
+    SMPI_Allgatherv(Buffer, DataSize, SMPI_CHAR, RecvBuffer, RecvCounts, Displs,
+                    SMPI_CHAR, Stream->mpiComm);
     free_FFSBuffer(Buf);
 
     FFSContext context = Stream->CPInfo->ffs_c;
@@ -992,18 +997,31 @@ extern void SstStreamDestroy(SstStream Stream)
      * StackStream is only used to access verbosity info
      * in a safe way after all streams have been destroyed
      */
-    struct _SstStream StackStream = *Stream;
+    struct _SstStream StackStream;
+    pthread_mutex_lock(&Stream->DataLock);
     CP_verbose(Stream, "Destroying stream %p, name %s\n", Stream,
                Stream->Filename);
-    pthread_mutex_lock(&Stream->DataLock);
-    Stream->Status = Closed;
-    if (Stream->Role == ReaderRole)
+    StackStream = *Stream;
+    Stream->Status = Destroyed;
+    struct _TimestepMetadataList *Next = Stream->Timesteps;
+    while (Next)
     {
-        Stream->DP_Interface->destroyReader(&Svcs, Stream->DP_Stream);
+        Next = Next->Next;
+        free(Stream->Timesteps);
+        Stream->Timesteps = Next;
     }
-    else
+    if (Stream->DP_Stream)
     {
-        Stream->DP_Interface->destroyWriter(&Svcs, Stream->DP_Stream);
+        pthread_mutex_unlock(&Stream->DataLock);
+        if (Stream->Role == ReaderRole)
+        {
+            Stream->DP_Interface->destroyReader(&Svcs, Stream->DP_Stream);
+        }
+        else
+        {
+            Stream->DP_Interface->destroyWriter(&Svcs, Stream->DP_Stream);
+        }
+        pthread_mutex_lock(&Stream->DataLock);
     }
     if (Stream->Readers)
     {
@@ -1012,11 +1030,21 @@ extern void SstStreamDestroy(SstStream Stream)
             CP_PeerConnection *connections_to_reader =
                 Stream->Readers[i]->Connections;
 
-            for (int j = 0; j < Stream->Readers[i]->ReaderCohortSize; j++)
+            if (connections_to_reader)
             {
-                free_attr_list(connections_to_reader[j].ContactList);
+                for (int j = 0; j < Stream->Readers[i]->ReaderCohortSize; j++)
+                {
+                    if (connections_to_reader[j].CMconn)
+                    {
+                        CMConnection_dereference(
+                            connections_to_reader[j].CMconn);
+                        connections_to_reader[j].CMconn = NULL;
+                    }
+                    free_attr_list(connections_to_reader[j].ContactList);
+                }
+                free(Stream->Readers[i]->Connections);
+                Stream->Readers[i]->Connections = NULL;
             }
-            free(Stream->Readers[i]->Connections);
             if (Stream->Readers[i]->Peers)
             {
                 free(Stream->Readers[i]->Peers);
@@ -1064,11 +1092,15 @@ extern void SstStreamDestroy(SstStream Stream)
             free_attr_list(Stream->ConnectionsToWriter[i].ContactList);
             if (Stream->ConnectionsToWriter[i].CMconn)
             {
-                CMConnection_close(Stream->ConnectionsToWriter[i].CMconn);
+                CMConnection_dereference(Stream->ConnectionsToWriter[i].CMconn);
+                Stream->ConnectionsToWriter[i].CMconn = NULL;
             }
         }
         if (Stream->ConnectionsToWriter)
+        {
             free(Stream->ConnectionsToWriter);
+            Stream->ConnectionsToWriter = NULL;
+        }
         free(Stream->Peers);
     }
     else if (Stream->ConfigParams->MarshalMethod == SstMarshalFFS)
@@ -1113,7 +1145,6 @@ extern void SstStreamDestroy(SstStream Stream)
         CP_verbose(
             Stream,
             "Reference count now zero, Destroying process SST info cache\n");
-        // wait .1 sec for last messages
         CManager_close(CPInfo->cm);
         if (CPInfo->ffs_c)
             free_FFSContext(CPInfo->ffs_c);
@@ -1277,7 +1308,7 @@ static void DP_verbose(SstStream Stream, char *Format, ...);
 static CManager CP_getCManager(SstStream Stream);
 static int CP_sendToPeer(SstStream Stream, CP_PeerCohort cohort, int rank,
                          CMFormat Format, void *data);
-static MPI_Comm CP_getMPIComm(SstStream Stream);
+static SMPI_Comm CP_getMPIComm(SstStream Stream);
 
 struct _CP_Services Svcs = {
     (CP_VerboseFunc)DP_verbose, (CP_GetCManagerFunc)CP_getCManager,
@@ -1321,7 +1352,8 @@ static int *reversePeerArray(int MySize, int MyRank, int PeerSize,
         {
             if (their_peers[j] == MyRank)
             {
-                ReversePeers = malloc((PeerCount + 2) * sizeof(int));
+                ReversePeers =
+                    realloc(ReversePeers, (PeerCount + 2) * sizeof(int));
                 ReversePeers[PeerCount] = i;
                 PeerCount++;
                 if (j == 0)
@@ -1365,6 +1397,10 @@ extern void getPeerArrays(int MySize, int MyRank, int PeerSize,
         if (reverseArray)
         {
             *reverseArray = reverse;
+        }
+        else
+        {
+            free(reverse);
         }
     }
 }
@@ -1431,7 +1467,7 @@ extern void CP_error(SstStream s, char *Format, ...)
 
 static CManager CP_getCManager(SstStream Stream) { return Stream->CPInfo->cm; }
 
-static MPI_Comm CP_getMPIComm(SstStream Stream) { return Stream->mpiComm; }
+static SMPI_Comm CP_getMPIComm(SstStream Stream) { return Stream->mpiComm; }
 
 extern void WriterConnCloseHandler(CManager cm, CMConnection closed_conn,
                                    void *client_data);

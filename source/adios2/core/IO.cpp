@@ -30,6 +30,7 @@
 
 #include "adios2/helper/adiosComm.h"
 #include "adios2/helper/adiosFunctions.h" //BuildParametersMap
+#include "adios2/helper/adiosString.h"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
 #include <adios2sys/SystemTools.hxx> // FileIsDirectory()
 
@@ -41,6 +42,10 @@
 #ifdef ADIOS2_HAVE_SST // external dependencies
 #include "adios2/engine/sst/SstReader.h"
 #include "adios2/engine/sst/SstWriter.h"
+#endif
+
+#ifdef ADIOS2_HAVE_TABLE // external dependencies
+#include "adios2/engine/table/TableWriter.h"
 #endif
 
 namespace adios2
@@ -78,8 +83,17 @@ std::unordered_map<std::string, IO::EngineFactoryEntry> Factory = {
     },
     {"ssc", IO::NoEngineEntry("ERROR: this version didn't compile with "
                               "SSC library, can't use SSC engine\n")},
-    {"table", IO::NoEngineEntry("ERROR: this version didn't compile with "
-                                "Table library, can't use Table engine\n")},
+    {"table",
+#ifdef ADIOS2_HAVE_TABLE
+     {IO::NoEngine("ERROR: Table engine only supports Write. It uses other "
+                   "engines as backend. Please use corresponding engines for "
+                   "Read\n"),
+      IO::MakeEngine<engine::TableWriter>}
+#else
+     IO::NoEngineEntry("ERROR: this version didn't compile with "
+                       "Table library, can't use Table engine\n")
+#endif
+    },
     {"sst",
 #ifdef ADIOS2_HAVE_SST
      {IO::MakeEngine<engine::SstReader>, IO::MakeEngine<engine::SstWriter>}
@@ -159,9 +173,9 @@ void IO::RegisterEngine(const std::string &engineType, EngineFactoryEntry entry)
 }
 
 IO::IO(ADIOS &adios, const std::string name, const bool inConfigFile,
-       const std::string hostLanguage, const bool debugMode)
+       const std::string hostLanguage)
 : m_ADIOS(adios), m_Name(name), m_InConfigFile(inConfigFile),
-  m_HostLanguage(hostLanguage), m_DebugMode(debugMode)
+  m_HostLanguage(hostLanguage)
 {
 }
 
@@ -232,7 +246,7 @@ void IO::SetParameters(const std::string &parameters)
 {
     TAU_SCOPED_TIMER("IO::other");
     adios2::Params parameterMap =
-        adios2::helper::BuildParametersMap(parameters, '=', ',', false);
+        adios2::helper::BuildParametersMap(parameters, '=', ',');
     SetParameters(parameterMap);
 }
 
@@ -254,18 +268,16 @@ size_t IO::AddTransport(const std::string type, const Params &parameters)
 {
     TAU_SCOPED_TIMER("IO::other");
     Params parametersMap(parameters);
-    if (m_DebugMode)
-    {
-        if (parameters.count("transport") == 1 ||
-            parameters.count("Transport") == 1)
-        {
-            throw std::invalid_argument("ERROR: key Transport (or transport) "
-                                        "is not valid for transport type " +
-                                        type + ", in call to AddTransport)");
-        }
 
-        CheckTransportType(type);
+    if (parameters.count("transport") == 1 ||
+        parameters.count("Transport") == 1)
+    {
+        throw std::invalid_argument("ERROR: key Transport (or transport) "
+                                    "is not valid for transport type " +
+                                    type + ", in call to AddTransport)");
     }
+
+    CheckTransportType(type);
 
     parametersMap["transport"] = type;
     m_TransportsParameters.push_back(parametersMap);
@@ -276,16 +288,12 @@ void IO::SetTransportParameter(const size_t transportIndex,
                                const std::string key, const std::string value)
 {
     TAU_SCOPED_TIMER("IO::other");
-    if (m_DebugMode)
+    if (transportIndex >= m_TransportsParameters.size())
     {
-        if (transportIndex >= m_TransportsParameters.size())
-        {
-            throw std::invalid_argument(
-                "ERROR: transportIndex is larger than "
-                "transports created with AddTransport, for key: " +
-                key + ", value: " + value +
-                "in call to SetTransportParameter\n");
-        }
+        throw std::invalid_argument(
+            "ERROR: transportIndex is larger than "
+            "transports created with AddTransport, for key: " +
+            key + ", value: " + value + "in call to SetTransportParameter\n");
     }
 
     m_TransportsParameters[transportIndex][key] = value;
@@ -395,14 +403,16 @@ void IO::RemoveAllAttributes() noexcept
 #undef declare_type
 }
 
-std::map<std::string, Params> IO::GetAvailableVariables() noexcept
+std::map<std::string, Params>
+IO::GetAvailableVariables(const std::set<std::string> &keys) noexcept
 {
     TAU_SCOPED_TIMER("IO::GetAvailableVariables");
+
     std::map<std::string, Params> variablesInfo;
     for (const auto &variablePair : m_Variables)
     {
-        const std::string name(variablePair.first);
-        const std::string type = InquireVariableType(name);
+        const std::string variableName = variablePair.first;
+        const std::string type = InquireVariableType(variableName);
 
         if (type == "compound")
         {
@@ -410,23 +420,7 @@ std::map<std::string, Params> IO::GetAvailableVariables() noexcept
 #define declare_template_instantiation(T)                                      \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
-        variablesInfo[name]["Type"] = type;                                    \
-        Variable<T> &variable = *InquireVariable<T>(name);                     \
-        variablesInfo[name]["AvailableStepsCount"] =                           \
-            helper::ValueToString(variable.m_AvailableStepsCount);             \
-        variablesInfo[name]["Shape"] = helper::VectorToCSV(variable.Shape());  \
-        if (variable.m_SingleValue)                                            \
-        {                                                                      \
-            variablesInfo[name]["SingleValue"] = "true";                       \
-        }                                                                      \
-        else                                                                   \
-        {                                                                      \
-            variablesInfo[name]["SingleValue"] = "false";                      \
-            variablesInfo[name]["Min"] =                                       \
-                helper::ValueToString(variable.Min());                         \
-            variablesInfo[name]["Max"] =                                       \
-                helper::ValueToString(variable.Max());                         \
-        }                                                                      \
+        variablesInfo[variableName] = GetVariableInfo<T>(variableName, keys);  \
     }
         ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
@@ -547,7 +541,8 @@ std::string IO::InquireAttributeType(const std::string &name,
 size_t IO::AddOperation(Operator &op, const Params &parameters) noexcept
 {
     TAU_SCOPED_TIMER("IO::other");
-    m_Operations.push_back(Operation{&op, parameters, Params()});
+    m_Operations.push_back(
+        Operation{&op, helper::LowerCaseParams(parameters), Params()});
     return m_Operations.size() - 1;
 }
 
@@ -565,7 +560,7 @@ Engine &IO::Open(const std::string &name, const Mode mode, helper::Comm comm)
         }
     }
 
-    if (m_DebugMode && isEngineFound)
+    if (isEngineFound)
     {
         if (isEngineActive) // check if active
         {
@@ -650,25 +645,19 @@ Engine &IO::Open(const std::string &name, const Mode mode, helper::Comm comm)
     }
     else
     {
-        if (m_DebugMode)
-        {
-            throw std::invalid_argument("ERROR: engine " + m_EngineType +
-                                        " not supported, IO SetEngine must add "
-                                        "a supported engine, in call to "
-                                        "Open\n");
-        }
+        throw std::invalid_argument("ERROR: engine " + m_EngineType +
+                                    " not supported, IO SetEngine must add "
+                                    "a supported engine, in call to "
+                                    "Open\n");
     }
 
     auto itEngine = m_Engines.emplace(name, std::move(engine));
 
-    if (m_DebugMode)
+    if (!itEngine.second)
     {
-        if (!itEngine.second)
-        {
-            throw std::invalid_argument(
-                "ERROR: engine of type " + m_EngineType + " and name " + name +
-                " could not be created, in call to Open\n");
-        }
+        throw std::invalid_argument("ERROR: engine of type " + m_EngineType +
+                                    " and name " + name +
+                                    " could not be created, in call to Open\n");
     }
     // return a reference
     return *itEngine.first->second.get();
@@ -683,14 +672,11 @@ Engine &IO::GetEngine(const std::string &name)
 {
     TAU_SCOPED_TIMER("IO::other");
     auto itEngine = m_Engines.find(name);
-    if (m_DebugMode)
+    if (itEngine == m_Engines.end())
     {
-        if (itEngine == m_Engines.end())
-        {
-            throw std::invalid_argument(
-                "ERROR: engine name " + name +
-                " could not be found, in call to GetEngine\n");
-        }
+        throw std::invalid_argument(
+            "ERROR: engine name " + name +
+            " could not be found, in call to GetEngine\n");
     }
     // return a reference
     return *itEngine->second.get();

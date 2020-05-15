@@ -24,9 +24,8 @@ namespace format
 std::mutex BPSerializer::m_Mutex;
 
 // PUBLIC
-BPSerializer::BPSerializer(const helper::Comm &comm, const bool debugMode,
-                           const uint8_t version)
-: BPBase(comm, debugMode), m_Version(version)
+BPSerializer::BPSerializer(const helper::Comm &comm, const uint8_t version)
+: BPBase(comm), m_Version(version)
 {
 }
 
@@ -450,14 +449,11 @@ void BPSerializer::MergeSerializeIndices(
                 break;
             }
 
-            if (m_DebugMode)
+            if (header.DataType == std::numeric_limits<uint8_t>::max() - 1)
             {
-                if (header.DataType == std::numeric_limits<uint8_t>::max() - 1)
-                {
-                    throw std::runtime_error(
-                        "ERROR: invalid data type for variable " + header.Name +
-                        "when writing metadata index\n");
-                }
+                throw std::runtime_error(
+                    "ERROR: invalid data type for variable " + header.Name +
+                    "when writing metadata index\n");
             }
 
             // move all positions to headerSize
@@ -570,14 +566,11 @@ void BPSerializer::MergeSerializeIndices(
             break;
         }
 
-        if (m_DebugMode)
+        if (header.DataType == std::numeric_limits<uint8_t>::max() - 1)
         {
-            if (header.DataType == std::numeric_limits<uint8_t>::max() - 1)
-            {
-                throw std::runtime_error(
-                    "ERROR: invalid data type for variable " + header.Name +
-                    "when writing collective metadata\n");
-            }
+            throw std::runtime_error("ERROR: invalid data type for variable " +
+                                     header.Name +
+                                     "when writing collective metadata\n");
         }
 
         // move all positions to headerSize

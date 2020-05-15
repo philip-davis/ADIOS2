@@ -13,6 +13,7 @@
 
 #include "SscHelper.h"
 #include "adios2/core/Engine.h"
+#include "adios2/helper/adiosMpiHandshake.h"
 #include "adios2/toolkit/profiling/taustubs/tautimer.hpp"
 #include <mpi.h>
 #include <queue>
@@ -43,40 +44,39 @@ private:
 
     ssc::BlockVecVec m_GlobalWritePattern;
     ssc::BlockVec m_LocalReadPattern;
+    nlohmann::json m_GlobalWritePatternJson;
+    nlohmann::json m_LocalReadPatternJson;
 
     ssc::RankPosMap m_AllReceivingWriterRanks;
     std::vector<char> m_Buffer;
     MPI_Win m_MpiWin;
+    MPI_Group m_MpiAllWritersGroup;
+    MPI_Comm m_StreamComm;
+    std::string m_MpiMode = "twosided";
 
-    int m_WorldRank;
-    int m_WorldSize;
+    int m_StreamRank;
+    int m_StreamSize;
     int m_ReaderRank;
     int m_ReaderSize;
-    int m_WriterSize;
-    int m_WriterMasterWorldRank;
-    int m_ReaderMasterWorldRank;
-    int m_AppID = 0;
-    int m_AppSize = 0;
-    std::vector<std::vector<int>> m_WriterGlobalMpiInfo;
-    std::vector<std::vector<int>> m_ReaderGlobalMpiInfo;
+
+    helper::MpiHandshake m_MpiHandshake;
 
     void SyncMpiPattern();
     void SyncWritePattern();
     void SyncReadPattern();
+    void GetOneSidedFencePush();
+    void GetOneSidedPostPush();
+    void GetOneSidedFencePull();
+    void GetOneSidedPostPull();
+    void GetTwoSided();
 
 #define declare_type(T)                                                        \
     void DoGetSync(Variable<T> &, T *) final;                                  \
     void DoGetDeferred(Variable<T> &, T *) final;                              \
-    std::map<size_t, std::vector<typename Variable<T>::Info>>                  \
-    DoAllStepsBlocksInfo(const Variable<T> &variable) const final;             \
     std::vector<typename Variable<T>::Info> DoBlocksInfo(                      \
         const Variable<T> &variable, const size_t step) const final;
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
-
-    template <typename T>
-    std::map<size_t, std::vector<typename Variable<T>::Info>>
-    AllStepsBlocksInfoCommon(const Variable<T> &variable) const;
 
     template <typename T>
     std::vector<typename Variable<T>::Info>
@@ -85,15 +85,16 @@ private:
     void DoClose(const int transportIndex = -1);
 
     template <class T>
-    void GetSyncCommon(Variable<T> &variable, T *data);
-
-    template <class T>
     void GetDeferredCommon(Variable<T> &variable, T *data);
 
     void CalculatePosition(ssc::BlockVecVec &mapVec,
                            ssc::RankPosMap &allOverlapRanks);
 
     int m_Verbosity = 0;
+    int m_MaxFilenameLength = 128;
+    int m_MaxStreamsPerApp = 1;
+    int m_RendezvousAppCount = 2;
+    int m_OpenTimeoutSecs = 10;
 };
 
 } // end namespace engine

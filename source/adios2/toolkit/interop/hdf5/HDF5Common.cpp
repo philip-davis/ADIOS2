@@ -61,7 +61,7 @@ public:
 };
 */
 
-HDF5Common::HDF5Common(const bool debugMode) : m_DebugMode(debugMode)
+HDF5Common::HDF5Common()
 {
     m_DefH5TypeComplexFloat =
         H5Tcreate(H5T_COMPOUND, sizeof(std::complex<float>));
@@ -165,14 +165,11 @@ void HDF5Common::Init(const std::string &name, helper::Comm const &comm,
             m_GroupId = H5Gcreate2(m_FileId, ts0.c_str(), H5P_DEFAULT,
                                    H5P_DEFAULT, H5P_DEFAULT);
 
-            if (m_DebugMode)
+            if (m_GroupId < 0)
             {
-                if (m_GroupId < 0)
-                {
-                    throw std::ios_base::failure(
-                        "ERROR: Unable to create HDF5 group " + ts0 +
-                        " in call to Open\n");
-                }
+                throw std::ios_base::failure(
+                    "ERROR: Unable to create HDF5 group " + ts0 +
+                    " in call to Open\n");
             }
         }
     }
@@ -197,11 +194,8 @@ void HDF5Common::WriteAdiosSteps()
 {
     if (m_FileId < 0)
     {
-        if (m_DebugMode)
-        {
-            throw std::invalid_argument("ERROR: invalid HDF5 file to record "
-                                        "steps, in call to Write\n");
-        }
+        throw std::invalid_argument("ERROR: invalid HDF5 file to record "
+                                    "steps, in call to Write\n");
     }
 
     if (!m_WriteMode)
@@ -235,11 +229,8 @@ unsigned int HDF5Common::GetNumAdiosSteps()
 
     if (m_FileId < 0)
     {
-        if (m_DebugMode)
-        {
-            throw std::invalid_argument(
-                "ERROR: invalid HDF5 file to read step attribute.\n");
-        }
+        throw std::invalid_argument(
+            "ERROR: invalid HDF5 file to read step attribute.\n");
     }
 
     if (!m_IsGeneratedByAdios)
@@ -605,9 +596,11 @@ void HDF5Common::Close()
     H5Tclose(m_DefH5TypeComplexFloat);
 
     H5Pclose(m_PropertyTxfID);
-    H5Fclose(m_FileId);
+
     if (-1 != m_ChunkPID)
         H5Pclose(m_ChunkPID);
+
+    H5Fclose(m_FileId);
 
     m_FileId = -1;
     m_GroupId = -1;
@@ -634,6 +627,9 @@ void HDF5Common::SetAdiosStep(int step)
         return;
     }
 
+    if (m_GroupId >= 0)
+        H5Gclose(m_GroupId);
+
     std::string stepName;
     StaticGetAdiosStepString(stepName, step);
     m_GroupId = H5Gopen(m_FileId, stepName.c_str(), H5P_DEFAULT);
@@ -648,6 +644,9 @@ void HDF5Common::SetAdiosStep(int step)
 
 void HDF5Common::Advance()
 {
+    if (m_WriteMode)
+        CheckWriteGroup();
+
     if (m_GroupId >= 0)
     {
         H5Gclose(m_GroupId);
@@ -702,13 +701,10 @@ void HDF5Common::CheckWriteGroup()
     m_GroupId = H5Gcreate2(m_FileId, stepName.c_str(), H5P_DEFAULT, H5P_DEFAULT,
                            H5P_DEFAULT);
 
-    if (m_DebugMode)
+    if (m_GroupId < 0)
     {
-        if (m_GroupId < 0)
-        {
-            throw std::ios_base::failure(
-                "ERROR: HDF5: Unable to create group " + stepName);
-        }
+        throw std::ios_base::failure("ERROR: HDF5: Unable to create group " +
+                                     stepName);
     }
 }
 
@@ -1188,6 +1184,29 @@ void HDF5Common::LocateAttrParent(const std::string &attrName,
 }
 
 //
+// Create Variables from IO
+//
+void HDF5Common::CreateVarsFromIO(core::IO &io)
+{
+    CheckWriteGroup();
+    const core::DataMap &variables = io.GetVariablesDataMap();
+    for (const auto &vpair : variables)
+    {
+        const std::string &varName = vpair.first;
+        const std::string &varType = vpair.second.first;
+#define declare_template_instantiation(T)                                      \
+    if (varType == helper::GetType<T>())                                       \
+    {                                                                          \
+        core::Variable<T> *v = io.InquireVariable<T>(varName);                 \
+        if (!v)                                                                \
+            return;                                                            \
+        DefineDataset(*v);                                                     \
+    }
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
+#undef declare_template_instantiation
+    }
+}
+//
 // write attr from io to hdf5
 // right now adios only support global attr
 // var does not have attr
@@ -1272,7 +1291,12 @@ void HDF5Common::ReadAttrToIO(core::IO &io)
     hsize_t numAttrs;
     // herr_t ret = H5Gget_num_objs(m_FileId, &numObj);
     H5O_info_t oinfo;
+
+#if H5_VERSION_GE(1, 11, 0)
+    herr_t ret = H5Oget_info(m_FileId, &oinfo, H5O_INFO_ALL);
+#else
     herr_t ret = H5Oget_info(m_FileId, &oinfo);
+#endif
     if (ret >= 0)
     {
         numAttrs = oinfo.num_attrs;
@@ -1297,7 +1321,10 @@ void HDF5Common::ReadAttrToIO(core::IO &io)
                 {
                     continue;
                 }
+                HDF5TypeGuard ag(attrId, E_H5_ATTRIBUTE);
+
                 hid_t sid = H5Aget_space(attrId);
+                HDF5TypeGuard sg(sid, E_H5_SPACE);
                 H5S_class_t stype = H5Sget_simple_extent_type(sid);
 
                 hid_t attrType = H5Aget_type(attrId);
@@ -1310,8 +1337,6 @@ void HDF5Common::ReadAttrToIO(core::IO &io)
                 {
                     ReadInNonStringAttr(io, attrName, attrId, attrType, sid);
                 }
-                H5Sclose(sid);
-                H5Aclose(attrId);
             }
         }
     }
@@ -1321,10 +1346,13 @@ void HDF5Common::ReadNativeAttrToIO(core::IO &io, hid_t datasetId,
                                     std::string const &pathFromRoot)
 {
     hsize_t numAttrs;
-    // herr_t ret = H5Gget_num_objs(m_FileId, &numObj);
-    H5O_info_t oinfo;
-    herr_t ret = H5Oget_info(datasetId, &oinfo);
 
+    H5O_info_t oinfo;
+#if H5_VERSION_GE(1, 11, 0)
+    herr_t ret = H5Oget_info(datasetId, &oinfo, H5O_INFO_ALL);
+#else
+    herr_t ret = H5Oget_info(datasetId, &oinfo);
+#endif
     if (ret >= 0)
     {
         numAttrs = oinfo.num_attrs;
@@ -1349,12 +1377,15 @@ void HDF5Common::ReadNativeAttrToIO(core::IO &io, hid_t datasetId,
                 {
                     continue;
                 }
+                HDF5TypeGuard ag(attrId, E_H5_ATTRIBUTE);
                 if (ATTRNAME_GIVEN_ADIOSNAME.compare(attrName) == 0)
                 {
                     continue;
                 }
 
                 hid_t sid = H5Aget_space(attrId);
+                HDF5TypeGuard sg(sid, E_H5_SPACE);
+
                 H5S_class_t stype = H5Sget_simple_extent_type(sid);
 
                 hid_t attrType = H5Aget_type(attrId);
@@ -1371,8 +1402,6 @@ void HDF5Common::ReadNativeAttrToIO(core::IO &io, hid_t datasetId,
                     ReadInNonStringAttr(io, attrNameInAdios, attrId, attrType,
                                         sid);
                 }
-                H5Sclose(sid);
-                H5Aclose(attrId);
             }
         }
     }

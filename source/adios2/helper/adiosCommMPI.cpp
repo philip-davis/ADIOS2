@@ -132,6 +132,11 @@ public:
                    void *recvbuf, size_t recvcount, Datatype recvtype,
                    const std::string &hint) const override;
 
+    void Allgatherv(const void *sendbuf, size_t sendcount, Datatype sendtype,
+                    void *recvbuf, const size_t *recvcounts,
+                    const size_t *displs, Datatype recvtype,
+                    const std::string &hint) const override;
+
     void Allreduce(const void *sendbuf, void *recvbuf, size_t count,
                    Datatype datatype, Comm::Op op,
                    const std::string &hint) const override;
@@ -193,7 +198,9 @@ void CommImplMPI::Free(const std::string &hint)
     if (m_MPIComm != MPI_COMM_NULL && m_MPIComm != MPI_COMM_WORLD &&
         m_MPIComm != MPI_COMM_SELF)
     {
-        CheckMPIReturn(MPI_Comm_free(&m_MPIComm), hint);
+        MPI_Comm mpiComm = m_MPIComm;
+        m_MPIComm = MPI_COMM_NULL; // prevent freeing a second time
+        CheckMPIReturn(MPI_Comm_free(&mpiComm), hint);
     }
 }
 
@@ -246,6 +253,29 @@ void CommImplMPI::Allgather(const void *sendbuf, size_t sendcount,
                                  ToMPI(sendtype), recvbuf,
                                  static_cast<int>(recvcount), ToMPI(recvtype),
                                  m_MPIComm),
+                   hint);
+}
+
+void CommImplMPI::Allgatherv(const void *sendbuf, size_t sendcount,
+                             Datatype sendtype, void *recvbuf,
+                             const size_t *recvcounts, const size_t *displs,
+                             Datatype recvtype, const std::string &hint) const
+{
+    std::vector<int> countsInt;
+    std::vector<int> displsInt;
+    {
+        auto cast = [](size_t sz) -> int { return int(sz); };
+        const int size = this->Size();
+        countsInt.reserve(size);
+        std::transform(recvcounts, recvcounts + size,
+                       std::back_inserter(countsInt), cast);
+        displsInt.reserve(size);
+        std::transform(displs, displs + size, std::back_inserter(displsInt),
+                       cast);
+    }
+    CheckMPIReturn(MPI_Allgatherv(sendbuf, static_cast<int>(sendcount),
+                                  ToMPI(sendtype), recvbuf, countsInt.data(),
+                                  displsInt.data(), ToMPI(recvtype), m_MPIComm),
                    hint);
 }
 
@@ -350,7 +380,6 @@ Comm::Status CommImplMPI::Recv(void *buf, size_t count, Datatype datatype,
                    hint);
 
     Comm::Status status;
-#ifdef ADIOS2_HAVE_MPI
     status.Source = mpiStatus.MPI_SOURCE;
     status.Tag = mpiStatus.MPI_TAG;
     {
@@ -359,7 +388,6 @@ Comm::Status CommImplMPI::Recv(void *buf, size_t count, Datatype datatype,
                        hint);
         status.Count = mpiCount;
     }
-#endif
     return status;
 }
 
@@ -486,7 +514,6 @@ Comm::Status CommReqImplMPI::Wait(const std::string &hint)
         return status;
     }
 
-#ifdef ADIOS2_HAVE_MPI
     std::vector<MPI_Request> mpiRequests = std::move(m_MPIReqs);
     std::vector<MPI_Status> mpiStatuses(mpiRequests.size());
 
@@ -536,22 +563,33 @@ Comm::Status CommReqImplMPI::Wait(const std::string &hint)
             break;
         }
     }
-#endif
 
     return status;
 }
 
-Comm CommFromMPI(MPI_Comm mpiComm)
+Comm CommWithMPI(MPI_Comm mpiComm)
 {
     static InitMPI const initMPI;
     if (mpiComm == MPI_COMM_NULL)
     {
         return CommDummy();
     }
-    MPI_Comm newComm;
-    MPI_Comm_dup(mpiComm, &newComm);
-    auto comm = std::unique_ptr<CommImpl>(new CommImplMPI(newComm));
+    auto comm = std::unique_ptr<CommImpl>(new CommImplMPI(mpiComm));
     return CommImpl::MakeComm(std::move(comm));
+}
+
+Comm CommDupMPI(MPI_Comm mpiComm)
+{
+    MPI_Comm newComm;
+    if (mpiComm != MPI_COMM_NULL)
+    {
+        MPI_Comm_dup(mpiComm, &newComm);
+    }
+    else
+    {
+        newComm = MPI_COMM_NULL;
+    }
+    return CommWithMPI(newComm);
 }
 
 MPI_Comm CommAsMPI(Comm const &comm)

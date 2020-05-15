@@ -32,7 +32,7 @@ namespace engine
 InSituMPIWriter::InSituMPIWriter(IO &io, const std::string &name,
                                  const Mode mode, helper::Comm comm)
 : Engine("InSituMPIWriter", io, name, mode, std::move(comm)),
-  m_BP3Serializer(m_Comm, m_DebugMode)
+  m_BP3Serializer(m_Comm)
 {
     TAU_SCOPED_TIMER("InSituMPIWriter::Open");
     m_EndMessage = " in call to InSituMPIWriter " + m_Name + " Open\n";
@@ -291,7 +291,7 @@ void InSituMPIWriter::AsyncSendVariable(std::string variableName)
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
         Variable<T> *variable = m_IO.InquireVariable<T>(variableName);         \
-        if (m_DebugMode && variable == nullptr)                                \
+        if (variable == nullptr)                                               \
         {                                                                      \
             throw std::invalid_argument(                                       \
                 "ERROR: variable " + variableName +                            \
@@ -345,6 +345,12 @@ void InSituMPIWriter::EndStep()
     }
 }
 
+size_t InSituMPIWriter::CurrentStep() const
+{
+    TAU_SCOPED_TIMER_FUNC();
+    return m_CurrentStep;
+}
+
 // PRIVATE
 
 #define declare_type(T)                                                        \
@@ -375,14 +381,11 @@ void InSituMPIWriter::InitParameters()
     if (itVerbosity != m_IO.m_Parameters.end())
     {
         m_Verbosity = std::stoi(itVerbosity->second);
-        if (m_DebugMode)
-        {
-            if (m_Verbosity < 0 || m_Verbosity > 5)
-                throw std::invalid_argument(
-                    "ERROR: Method verbose argument must be an "
-                    "integer in the range [0,5], in call to "
-                    "Open or Engine constructor\n");
-        }
+        if (m_Verbosity < 0 || m_Verbosity > 5)
+            throw std::invalid_argument(
+                "ERROR: Method verbose argument must be an "
+                "integer in the range [0,5], in call to "
+                "Open or Engine constructor\n");
     }
 }
 

@@ -48,21 +48,23 @@ public:
      * Base constructor that all derived classes pass
      * @param type from derived class
      * @param comm passed to m_Comm
-     * @param debugMode passed to m_DebugMode
      */
     Transport(const std::string type, const std::string library,
-              helper::Comm const &comm, const bool debugMode);
+              helper::Comm const &comm);
 
     virtual ~Transport() = default;
 
     void InitProfiler(const Mode openMode, const TimeUnit timeUnit);
 
     /**
-     * Opens transport, required before SetBuffer, Write, Read, Flush, Close
+     * Opens transport, possibly asynchronously, required before SetBuffer,
+     * Write, Read, Flush, Close
      * @param name
      * @param openMode
+     * @param async
      */
-    virtual void Open(const std::string &name, const Mode openMode) = 0;
+    virtual void Open(const std::string &name, const Mode openMode,
+                      const bool async = false) = 0;
 
     /**
      * If OS buffered (FILE* or fstream), sets the buffer size
@@ -112,14 +114,14 @@ public:
     /** closes current file, after this file becomes unreachable */
     virtual void Close() = 0;
 
+    /** deletes current file, after this file becomes unreachable */
+    virtual void Delete() = 0;
+
     virtual void SeekToEnd() = 0;
 
     virtual void SeekToBegin() = 0;
 
 protected:
-    /** true: turn on exceptions */
-    const bool m_DebugMode = false;
-
     virtual void MkDir(const std::string &fileName);
 
     void ProfilerStart(const std::string process) noexcept;

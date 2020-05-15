@@ -165,8 +165,7 @@ public:
 
     template <class T>
     void GathervVectors(const std::vector<T> &in, std::vector<T> &out,
-                        size_t &position, int rankDestination = 0,
-                        size_t extraSize = 0) const;
+                        size_t &position, int rankDestination = 0) const;
     /**
      * Perform AllGather for source value
      * @param source input
@@ -195,6 +194,11 @@ public:
     void Allgather(const TSend *sendbuf, size_t sendcount, TRecv *recvbuf,
                    size_t recvcount,
                    const std::string &hint = std::string()) const;
+
+    template <typename TSend, typename TRecv>
+    void Allgatherv(const TSend *sendbuf, size_t sendcount, TRecv *recvbuf,
+                    const size_t *recvcounts, const size_t *displs,
+                    const std::string &hint = std::string()) const;
 
     template <typename T>
     void Allreduce(const T *sendbuf, T *recvbuf, size_t count, Op op,
@@ -372,6 +376,11 @@ public:
                            Datatype sendtype, void *recvbuf, size_t recvcount,
                            Datatype recvtype,
                            const std::string &hint) const = 0;
+    virtual void Allgatherv(const void *sendbuf, size_t sendcount,
+                            Datatype sendtype, void *recvbuf,
+                            const size_t *recvcounts, const size_t *displs,
+                            Datatype recvtype,
+                            const std::string &hint) const = 0;
 
     virtual void Allreduce(const void *sendbuf, void *recvbuf, size_t count,
                            Datatype datatype, Comm::Op op,

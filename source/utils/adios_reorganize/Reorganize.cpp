@@ -32,7 +32,7 @@
 #include "adios2/helper/adiosFunctions.h"
 #include "adios2/helper/adiosString.h"
 
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
 #include "adios2/helper/adiosCommMPI.h"
 #else
 #include "adios2/helper/adiosCommDummy.h"
@@ -50,9 +50,9 @@ namespace utils
 Reorganize::Reorganize(int argc, char *argv[])
 : Utils("adios_reorganize", argc, argv)
 {
-#ifdef ADIOS2_HAVE_MPI
+#if ADIOS2_USE_MPI
     {
-        auto commWorld = helper::CommFromMPI(MPI_COMM_WORLD);
+        auto commWorld = helper::CommWithMPI(MPI_COMM_WORLD);
         m_Comm = commWorld.Split(m_CommSplitColor, 0);
     }
 #else
@@ -61,7 +61,7 @@ Reorganize::Reorganize(int argc, char *argv[])
     m_Rank = m_Comm.Rank();
     m_Size = m_Comm.Size();
 
-    if (argc < 5)
+    if (argc < 7)
     {
         PrintUsage();
         throw std::invalid_argument(
@@ -131,7 +131,7 @@ void Reorganize::Run()
     print0("Write method            = ", wmethodname);
     print0("Write method parameters = ", wmethodparam_str);
 
-    core::ADIOS adios(m_Comm.Duplicate(), true, "C++");
+    core::ADIOS adios(m_Comm.Duplicate(), "C++");
     core::IO &io = adios.DeclareIO("group");
 
     print0("Waiting to open stream ", infilename, "...");
@@ -154,11 +154,29 @@ void Reorganize::Run()
             rStream.BeginStep(adios2::StepMode::Read, 10.0);
         if (status == adios2::StepStatus::NotReady)
         {
-            if (!m_Rank)
+            if (handleAsStream)
             {
-                std::cout << " No new steps arrived in a while " << std::endl;
+                if (!m_Rank)
+                {
+                    std::cout << " No new steps arrived in a while "
+                              << std::endl;
+                }
+                continue;
             }
-            continue;
+            else
+            {
+                if (!m_Rank)
+                {
+                    std::cout
+                        << " Timeout waiting for next step. If this is "
+                           "a live stream through file, use a different "
+                           "reading engine, like FileStream or BP4. "
+                           "If it is an unclosed BP file, you may manually "
+                           "close it with using adios_deactive_bp.sh."
+                        << std::endl;
+                }
+                break;
+            }
         }
         else if (status != adios2::StepStatus::OK)
         {
@@ -179,7 +197,7 @@ void Reorganize::Run()
         const core::DataMap &variables = io.GetVariablesDataMap();
         const core::DataMap &attributes = io.GetAttributesDataMap();
 
-        print0("File info:");
+        print0("____________________\n\nFile info:");
         print0("  current step:   ", curr_step);
         print0("  # of variables: ", variables.size());
         print0("  # of attributes: ", attributes.size());
@@ -236,7 +254,7 @@ Params Reorganize::parseParams(const std::string &param_str)
         kvs.push_back(kv);
     }
 
-    return helper::BuildParametersMap(kvs, '=', true);
+    return helper::BuildParametersMap(kvs, '=');
 }
 
 void Reorganize::ParseArguments()
@@ -245,7 +263,24 @@ void Reorganize::ParseArguments()
     wmethodparams = parseParams(wmethodparam_str);
 }
 
-void Reorganize::ProcessParameters() const {}
+void Reorganize::ProcessParameters()
+{
+    if (rmethodname.empty())
+    {
+        handleAsStream = false;
+        return;
+    }
+    std::string s(rmethodname);
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    if (s == "file" || s == "bpfile" || s == "bp3" || s == "hdf5")
+    {
+        handleAsStream = false;
+    }
+    else
+    {
+        handleAsStream = true;
+    }
+}
 
 void Reorganize::PrintUsage() const noexcept
 {
@@ -329,7 +364,29 @@ Reorganize::Decompose(int numproc, int rank, VarInfo &vi,
         return writesize;
     }
 
+    /* Handle local array: only one block for now */
+    if (vi.v->m_ShapeID == adios2::ShapeID::LocalArray)
+    {
+        if (rank == 0)
+        {
+            writesize = 1;
+            for (int i = 0; i < vi.v->m_Count.size(); i++)
+            {
+                writesize *= vi.v->m_Count[i];
+                // vi.start.push_back(0);
+                vi.count.push_back(vi.v->m_Count[i]);
+            }
+        }
+        else
+        {
+            writesize = 0;
+        }
+        return writesize;
+    }
+
     size_t ndim = vi.v->GetShape().size();
+
+    /* Scalars */
     if (ndim == 0)
     {
         // scalars -> rank 0 writes them
@@ -340,6 +397,7 @@ Reorganize::Decompose(int numproc, int rank, VarInfo &vi,
         return writesize;
     }
 
+    /* Global Arrays */
     /* calculate this process' position in the n-dim space
     0 1 2
     3 4 5
@@ -439,6 +497,7 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
         const std::string &type(variablePair.second.first);
         core::VariableBase *variable = nullptr;
         print0("Get info on variable ", varidx, ": ", name);
+        size_t nBlocks = 1;
 
         if (type == "compound")
         {
@@ -447,49 +506,80 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
 #define declare_template_instantiation(T)                                      \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
-        variable = io.InquireVariable<T>(variablePair.first);                  \
+        core::Variable<T> *v = io.InquireVariable<T>(variablePair.first);      \
+        if (v->m_ShapeID == adios2::ShapeID::LocalArray)                       \
+        {                                                                      \
+                                                                               \
+            auto blocks = rStream.BlocksInfo(*v, rStream.CurrentStep());       \
+            nBlocks = blocks.size();                                           \
+        }                                                                      \
+        variable = v;                                                          \
     }
         ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
 
         varinfo[varidx].v = variable;
 
-        if (variable == nullptr)
+        if (variable != nullptr)
         {
-            std::cerr << "rank " << m_Rank << ": ERROR: Variable " << name
-                      << " inquiry failed" << std::endl;
-            return 1;
-        }
 
-        // print variable type and dimensions
-        if (!m_Rank)
-        {
-            std::cout << "    " << type << " " << name;
-            if (variable->GetShape().size() > 0)
+            // print variable type and dimensions
+            if (!m_Rank)
             {
-                std::cout << "[" << variable->GetShape()[0];
-                for (size_t j = 1; j < variable->GetShape().size(); j++)
+                std::cout << "    " << type << " " << name;
+            }
+            // if (variable->GetShape().size() > 0)
+            if (variable->m_ShapeID == adios2::ShapeID::GlobalArray)
+            {
+                if (!m_Rank)
                 {
-                    std::cout << ", " << variable->GetShape()[j];
+                    std::cout << "[" << variable->GetShape()[0];
+                    for (size_t j = 1; j < variable->GetShape().size(); j++)
+                    {
+                        std::cout << ", " << variable->GetShape()[j];
+                    }
+                    std::cout << "]" << std::endl;
                 }
-                std::cout << "]" << std::endl;
+            }
+
+            else if (variable->m_ShapeID == adios2::ShapeID::GlobalValue)
+            {
+                print0("\tscalar");
+            }
+            else if (variable->m_ShapeID == adios2::ShapeID::LocalArray)
+            {
+                print0("\t local array ");
+                if (nBlocks > 1)
+                {
+                    print0(
+                        "ERROR: adios_reorganize does not support Local Arrays "
+                        "except when there is only 1 written block in each "
+                        "step. This one has ",
+                        nBlocks, " blocks in this step ");
+                    return 1;
+                }
             }
             else
             {
-                print0("\tscalar\n");
+                print0("\n *** Unidentified object ", name, " ***\n");
+                return 1;
+            }
+
+            // determine subset we will write
+            size_t sum_count =
+                Decompose(m_Size, m_Rank, varinfo[varidx], decomp_values);
+            varinfo[varidx].writesize = sum_count * variable->m_ElementSize;
+
+            if (varinfo[varidx].writesize != 0)
+            {
+                write_total += varinfo[varidx].writesize;
+                if (largest_block < varinfo[varidx].writesize)
+                    largest_block = varinfo[varidx].writesize;
             }
         }
-
-        // determine subset we will write
-        size_t sum_count =
-            Decompose(m_Size, m_Rank, varinfo[varidx], decomp_values);
-        varinfo[varidx].writesize = sum_count * variable->m_ElementSize;
-
-        if (varinfo[varidx].writesize != 0)
+        else
         {
-            write_total += varinfo[varidx].writesize;
-            if (largest_block < varinfo[varidx].writesize)
-                largest_block = varinfo[varidx].writesize;
+            print0("    Not available in this step");
         }
         ++varidx;
     }
@@ -526,13 +616,13 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
     size_t nvars = variables.size();
     if (nvars != varinfo.size())
     {
-        std::cerr
-            << "ERROR rank " << m_Rank
-            << ": Invalid program state, number "
-               "of variables ("
-            << nvars
-            << ") to read does not match the number of processed variables ("
-            << varinfo.size() << ")" << std::endl;
+        std::cerr << "ERROR rank " << m_Rank
+                  << ": Invalid program state, number "
+                     "of variables ("
+                  << nvars
+                  << ") to read does not match the number of processed "
+                     "variables ("
+                  << varinfo.size() << ")" << std::endl;
     }
 
     /*
@@ -540,18 +630,20 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
      */
     for (size_t varidx = 0; varidx < nvars; ++varidx)
     {
-        const std::string &name = varinfo[varidx].v->m_Name;
-        assert(varinfo[varidx].readbuf == nullptr);
-        if (varinfo[varidx].writesize != 0)
+        if (varinfo[varidx].v != nullptr)
         {
-            // read variable subset
-            std::cout << "rank " << m_Rank << ": Read variable " << name
-                      << std::endl;
-            const std::string &type = variables.at(name).first;
-            if (type == "compound")
+            const std::string &name = varinfo[varidx].v->m_Name;
+            assert(varinfo[varidx].readbuf == nullptr);
+            if (varinfo[varidx].writesize != 0)
             {
-                // not supported
-            }
+                // read variable subset
+                std::cout << "rank " << m_Rank << ": Read variable " << name
+                          << std::endl;
+                const std::string &type = variables.at(name).first;
+                if (type == "compound")
+                {
+                    // not supported
+                }
 #define declare_template_instantiation(T)                                      \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
@@ -570,8 +662,9 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
                            reinterpret_cast<T *>(varinfo[varidx].readbuf));    \
         }                                                                      \
     }
-            ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
+                ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
+            }
         }
     }
     rStream.EndStep(); // read in data into allocated pointers
@@ -582,21 +675,29 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
     wStream.BeginStep();
     for (size_t varidx = 0; varidx < nvars; ++varidx)
     {
-        const std::string &name = varinfo[varidx].v->m_Name;
-        if (varinfo[varidx].writesize != 0)
+        if (varinfo[varidx].v != nullptr)
         {
-            // Write variable subset
-            std::cout << "rank " << m_Rank << ": Write variable " << name
-                      << std::endl;
-            const std::string &type = variables.at(name).first;
-            if (type == "compound")
+            const std::string &name = varinfo[varidx].v->m_Name;
+            if (varinfo[varidx].writesize != 0)
             {
-                // not supported
-            }
+                // Write variable subset
+                std::cout << "rank " << m_Rank << ": Write variable " << name
+                          << std::endl;
+                const std::string &type = variables.at(name).first;
+                if (type == "compound")
+                {
+                    // not supported
+                }
 #define declare_template_instantiation(T)                                      \
     else if (type == helper::GetType<T>())                                     \
     {                                                                          \
         if (varinfo[varidx].count.size() == 0)                                 \
+        {                                                                      \
+            wStream.Put<T>(name,                                               \
+                           reinterpret_cast<T *>(varinfo[varidx].readbuf),     \
+                           adios2::Mode::Sync);                                \
+        }                                                                      \
+        else if (varinfo[varidx].v->m_ShapeID == adios2::ShapeID::LocalArray)  \
         {                                                                      \
             wStream.Put<T>(name,                                               \
                            reinterpret_cast<T *>(varinfo[varidx].readbuf),     \
@@ -610,8 +711,9 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
                            reinterpret_cast<T *>(varinfo[varidx].readbuf));    \
         }                                                                      \
     }
-            ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
+                ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
+            }
         }
     }
     wStream.EndStep(); // write output buffer to file
