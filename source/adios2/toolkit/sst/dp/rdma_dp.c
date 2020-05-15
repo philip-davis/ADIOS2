@@ -755,7 +755,7 @@ static void RdmaReleaseTimestep(CP_Services Svcs, DP_WS_Stream Stream_v,
 
     Svcs->verbose(Stream->CP_Stream, "Releasing timestep %ld\n", Timestep);
 
-    pthread_mutex_lock(&ts_mutex);
+    pthread_mutex_trylock(&ts_mutex);
     while ((*List) && (*List)->Timestep != Timestep)
     {
         List = &((*List)->Next);
